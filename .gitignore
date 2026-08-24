@@ -1,0 +1,39 @@
+# FASTQ
+data/raw/*.fastq
+data/raw/*.fastq.gz
+data/raw/*.fq
+data/raw/*.fq.gz
+
+# Arquivos grandes de alinhamento
+*.bam
+*.sam
+*.cram
+
+# Índices e referências grandes
+reference/genome/
+reference/salmon_index/
+
+# Dados processados
+data/processed/
+
+# Resultados gerados
+results/
+
+# Logs
+logs/
+*.log
+
+# Snakemake
+.snakemake/
+
+# Conda
+.conda/
+
+# R
+.Rhistory
+.RData
+.Ruserdata
+
+# Sistema
+.DS_Store
+Thumbs.db
