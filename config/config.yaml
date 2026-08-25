@@ -1,0 +1,14 @@
+name: transcriptomics_env
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - r-base=4.3
+  - r-tidyverse
+  - r-renv
+  - r-snakemake-wrapper
+  - bioconductor-limma
+  - bioconductor-edger
+  - bioconductor-geoquery
+  - bioconductor-biomart
