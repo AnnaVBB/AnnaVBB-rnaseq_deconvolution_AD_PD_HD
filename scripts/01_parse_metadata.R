@@ -16,10 +16,10 @@ soft_file   <- args[1]
 counts_file <- args[2]
 output_csv  <- args[3]
 
-counts_header <- colnames(fread(cmd = paste("zcat", counts_file), nrows = 1, data.table = FALSE))
+counts_header <- colnames(fread(counts_file, nrows = 1, data.table = FALSE))
 valid_samples <- counts_header[-1]
 
-gds <- getGEO(filename = soft_file)
+gds <- getGEO(filename = soft_file, getGPL = FALSE)
 gsm_list <- GSMList(gds)
 
 extract_char_value <- function(chars, key_pattern) {
@@ -29,17 +29,16 @@ extract_char_value <- function(chars, key_pattern) {
   return(str_trim(val))
 }
 
-harmonize_diagnosis <- function(raw_diag) {
-  if (is.na(raw_diag)) return(NA_character_)
-  diag_clean <- tolower(raw_diag)
+harmonize_diagnosis <- function(raw_diag, title_text) {
+  combined <- tolower(paste(raw_diag, title_text))
   
-  if (str_detect(diag_clean, "control|normal|non-demented|neurologically normal")) {
+  if (str_detect(combined, "control|normal|non-demented|^c_")) {
     return("Control")
-  } else if (str_detect(diag_clean, "alzheimer|ad")) {
+  } else if (str_detect(combined, "alzheimer|ad")) {
     return("AD")
-  } else if (str_detect(diag_clean, "huntington|hd")) {
+  } else if (str_detect(combined, "huntington|hd")) {
     return("HD")
-  } else if (str_detect(diag_clean, "parkinson|pd")) {
+  } else if (str_detect(combined, "parkinson|pd|^p_")) {
     return("PD")
   } else {
     return("Other")
@@ -54,21 +53,22 @@ for (gsm_id in names(gsm_list)) {
   gsm <- gsm_list[[gsm_id]]
   meta <- Meta(gsm)
   chars <- meta$characteristics_ch1
+  title_val <- meta$title
   
-  raw_disease <- extract_char_value(chars, "disease|diagnosis|status|condition")
+  raw_disease <- extract_char_value(chars, "disease|diagnosis|status|condition|subject state")
   age_val     <- extract_char_value(chars, "age")
   sex_val     <- extract_char_value(chars, "sex|gender")
-  rin_val     <- extract_char_value(chars, "rin|rna integrity number")
-  pmi_val     <- extract_char_value(chars, "pmi|post-mortem interval")
-  region_val  <- extract_char_value(chars, "brain region|region|tissue")
+  rin_val     <- extract_char_value(chars, "rin|rna integrity|integrity")
+  pmi_val     <- extract_char_value(chars, "pmi|post-mortem|postmortem")
+  region_val  <- extract_char_value(chars, "brain region|region|tissue|source")
   
   meta_rows[[gsm_id]] <- data.frame(
     sample_id     = gsm_id,
-    title         = meta$title,
-    group         = harmonize_diagnosis(raw_disease),
-    raw_diagnosis = raw_disease,
+    title         = title_val,
+    group         = harmonize_diagnosis(raw_disease, title_val),
+    raw_diagnosis = ifelse(is.na(raw_disease), title_val, raw_disease),
     age           = as.numeric(str_extract(age_val, "\\d+(\\.\\d+)?")),
-    sex           = ifelse(str_detect(tolower(sex_val), "^m"), "M", ifelse(str_detect(tolower(sex_val), "^f"), "F", NA_character_)),
+    sex           = ifelse(str_detect(tolower(sex_val), "^m|male"), "M", ifelse(str_detect(tolower(sex_val), "^f|female"), "F", NA_character_)),
     rin           = as.numeric(str_extract(rin_val, "\\d+(\\.\\d+)?")),
     pmi           = as.numeric(str_extract(pmi_val, "\\d+(\\.\\d+)?")),
     region        = region_val,

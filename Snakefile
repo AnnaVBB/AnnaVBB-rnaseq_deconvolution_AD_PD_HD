@@ -5,7 +5,8 @@ DATASETS = config.get("core_datasets", ["GSE53697", "GSE64810", "GSE68719"])
 rule all:
     input:
         expand("results/qc/{dataset}_audit_report.txt", dataset=DATASETS),
-        expand("metadata/{dataset}_samples.csv", dataset=DATASETS)
+        expand("metadata/{dataset}_samples.csv", dataset=DATASETS),
+        expand("data/processed/{dataset}_counts_harmonized.rds", dataset=DATASETS)
 
 rule audit_dataset:
     input:
@@ -16,7 +17,7 @@ rule audit_dataset:
         report = "results/qc/{dataset}_audit_report.txt"
     shell:
         """
-        Rscript scripts/00_auditoria.R {input.counts} {input.annot} {input.soft} {output.report}
+        RENV_CONFIG_AUTO_LOAD=false Rscript scripts/00_auditoria.R {input.counts} {input.annot} {input.soft} {output.report}
         """
 
 rule parse_metadata:
@@ -28,5 +29,17 @@ rule parse_metadata:
         meta   = "metadata/{dataset}_samples.csv"
     shell:
         """
-        Rscript scripts/01_parse_metadata.R {input.soft} {input.counts} {output.meta}
+        RENV_CONFIG_AUTO_LOAD=false Rscript scripts/01_parse_metadata.R {input.soft} {input.counts} {output.meta}
+        """
+
+rule harmonize_counts:
+    input:
+        counts = "data/raw/{dataset}_raw_counts_GRCh38.p13_NCBI.tsv.gz",
+        annot  = "data/raw/Human.GRCh38.p13.annot.tsv.gz",
+        meta   = "metadata/{dataset}_samples.csv"
+    output:
+        rds    = "data/processed/{dataset}_counts_harmonized.rds"
+    shell:
+        """
+        RENV_CONFIG_AUTO_LOAD=false Rscript scripts/02_harmonize_annotations.R {input.counts} {input.annot} {output.rds}
         """
