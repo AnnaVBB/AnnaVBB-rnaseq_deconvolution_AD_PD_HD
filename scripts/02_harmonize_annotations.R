@@ -5,7 +5,8 @@ suppressPackageStartupMessages({
   library(readr)
   library(edgeR)
 })
-
+#Juntamos as informações de counts.tsv e annotation.tsv através do GeneID 
+#Transformar duas tabelas separadas (contagens e anotação) em uma matriz de expressão limpa e identificada por símbolo de gene
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 3) {
   stop("Uso: Rscript 02_harmonize_annotations.R <counts.tsv.gz> <annot.tsv.gz> <out_rds>")
@@ -41,24 +42,25 @@ counts_clean <- counts_annotated %>%
   filter(!is.na(.data[[symbol_col]]) & .data[[symbol_col]] != "" & .data[[symbol_col]] != "-")
 
 # Resolver duplicidades mantendo a linha de maior contagem total
-sample_cols <- setdiff(colnames(counts_df), "GeneID")
+sample_cols <- setdiff(colnames(counts_df), "GeneID") #pegamos as colunas das amostras, apenas GSMs e convertemos para uma matriz numérica
 mat_only <- as.matrix(counts_clean[, sample_cols])
 rowSums_val <- rowSums(mat_only, na.rm = TRUE)
 
+#adicionamos uma coluna temporária para poder remover os genes com o mesmo símbolo
 counts_clean$row_sum <- rowSums_val
-counts_dedup <- counts_clean %>%
-  arrange(desc(row_sum)) %>%
-  distinct(.data[[symbol_col]], .keep_all = TRUE) %>%
+counts_dedup <- counts_clean %>% #criamos a tabela sem duplicações de símbolo
+  arrange(desc(row_sum)) %>% #ordenamos os gens em ordem decrescente para que os genes com maior soma de contagens fiquem primeiro
+  distinct(.data[[symbol_col]], .keep_all = TRUE) %>% #removemos duplicatas de símbolo, mantendo apenas uma ocorrência de cada
   select(-row_sum)
 
-# 4. Filtragem por baixa expressão (cpm > 0.5 em pelo menos 20% das amostras)
+# 4. Filtragem por baixa expressão (cpm > 1 em pelo menos 20% das amostras)
 mat_final <- as.matrix(counts_dedup[, sample_cols])
 rownames(mat_final) <- counts_dedup[[symbol_col]]
 
 # Garantir dados numéricos
 class(mat_final) <- "numeric"
 
-keep <- rowSums(cpm(mat_final) > 0.5, na.rm = TRUE) >= (0.20 * ncol(mat_final))
+keep <- rowSums(cpm(mat_final) > 1, na.rm = TRUE) >= (0.20 * ncol(mat_final))
 mat_filtered <- mat_final[keep, ]
 
 # Salvar lista final
