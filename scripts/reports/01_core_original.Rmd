@@ -1,0 +1,22 @@
+---
+title: "Relatório Fase 01: Reprodução com Dados Originais do Núcleo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+<!-- Reprodução do artigo, estudo do núcleo (usando os dados/matrizes originais deles). -->
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(dplyr)
+library(readr)
+library(DT)
+library(htmltools)
+library(ggplot2)
+
+datasets <- c("GSE53697", "GSE64810", "GSE68719")

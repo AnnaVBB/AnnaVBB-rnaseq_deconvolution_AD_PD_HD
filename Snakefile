@@ -6,7 +6,8 @@ rule all:
     input:
         expand("results/qc/{dataset}_audit_report.txt", dataset=DATASETS),
         expand("metadata/{dataset}_samples.csv", dataset=DATASETS),
-        expand("data/processed/{dataset}_counts_harmonized.rds", dataset=DATASETS)
+        expand("results/01_core_original/{dataset}/{dataset}_deg_results.csv", dataset=DATASETS),
+        "reports/01_core_original.html"
 
 rule audit_dataset:
     input:
@@ -32,14 +33,27 @@ rule parse_metadata:
         RENV_CONFIG_AUTO_LOAD=false Rscript scripts/01_parse_metadata.R {input.soft} {input.counts} {output.meta}
         """
 
-rule harmonize_counts:
+rule run_exploratory_analysis_original:
     input:
         counts = "data/raw/{dataset}_raw_counts_GRCh38.p13_NCBI.tsv.gz",
-        annot  = "data/raw/Human.GRCh38.p13.annot.tsv.gz",
         meta   = "metadata/{dataset}_samples.csv"
     output:
-        rds    = "data/processed/{dataset}_counts_harmonized.rds"
+        deg     = "results/01_core_original/{dataset}/{dataset}_deg_results.csv",
+        volcano = "results/01_core_original/{dataset}/{dataset}_volcano.pdf"
     shell:
         """
-        RENV_CONFIG_AUTO_LOAD=false Rscript scripts/02_harmonize_annotations.R {input.counts} {input.annot} {output.rds}
+        Rscript scripts/02b_exploratory_deg.R \
+            {input.counts} {input.meta} results/01_core_original/{wildcards.dataset}/{wildcards.dataset}
+        """
+
+rule generate_html_report_phase01:
+    input:
+        degs = expand("results/01_core_original/{dataset}/{dataset}_deg_results.csv", dataset=DATASETS),
+        rmd  = "scripts/reports/01_core_original.Rmd"
+    output:
+        html = "reports/01_core_original.html"
+    shell:
+        """
+        Rscript -e "rmarkdown::render('scripts/reports/01_core_original.Rmd')"
+        mv scripts/reports/01_core_original.html reports/01_core_original.html
         """

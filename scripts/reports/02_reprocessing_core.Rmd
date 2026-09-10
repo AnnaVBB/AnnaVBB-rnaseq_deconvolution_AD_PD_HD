@@ -1,0 +1,1 @@
+<!-- Análise do estudo do núcleo com nosso próprio pipeline de processamento -->
