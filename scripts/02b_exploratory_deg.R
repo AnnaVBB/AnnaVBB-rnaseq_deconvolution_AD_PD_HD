@@ -60,16 +60,53 @@ deg_out_csv <- paste0(out_prefix, "_deg_results.csv")
 write_csv(res_table, deg_out_csv)
 cat("[SUCCESS] Resultados DEG salvos em:", deg_out_csv, "\n")
 
-# 3. Gerar Gráfico Volcano Plot
-pdf(paste0(out_prefix, "_volcano.pdf"), width = 6, height = 5)
-p <- ggplot(res_table, aes(x = logFC, y = -log10(P.Value))) +
+# -------------------------------------------------------------
+# 3. Gerar PCA Plot
+# -------------------------------------------------------------
+pca <- prcomp(t(v$E), scale. = TRUE)
+pca_df <- data.frame(
+  PC1 = pca$x[,1],
+  PC2 = pca$x[,2],
+  Group = metadata$group,
+  Sample = metadata$sample_id
+)
+var_explained <- round(100 * (pca$sdev^2 / sum(pca$sdev^2)), 1)
+
+p_pca <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Group, label = Sample)) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  labs(title = paste("PCA Plot -", disease_label, "vs Control"),
+       x = paste0("PC1 (", var_explained[1], "%)"),
+       y = paste0("PC2 (", var_explained[2], "%)"))
+
+ggsave(paste0(out_prefix, "_pca.png"), p_pca, width = 6, height = 5, dpi = 300)
+
+# -------------------------------------------------------------
+# 4. Gerar Volcano Plot
+# -------------------------------------------------------------
+p_volcano <- ggplot(res_table, aes(x = logFC, y = -log10(P.Value))) +
   geom_point(aes(color = adj.P.Val < 0.05 & abs(logFC) > 0.58), alpha = 0.6, size = 1.5) +
   scale_color_manual(values = c("grey60", "red3")) +
   theme_minimal() +
   labs(title = paste("Volcano Plot:", disease_label, "vs Control"),
-       subtitle = paste("Dataset:", basename(tsv_file)),
-       x = "Log2 Fold Change", y = "-Log10 P-Value", color = "FDR < 0.05 & |LFC| > 0.58")
-print(p)
+       x = "Log2 Fold Change", y = "-Log10 P-Value", color = "Significativo (FDR < 0.05)")
+
+ggsave(paste0(out_prefix, "_volcano.png"), p_volcano, width = 6, height = 5, dpi = 300)
+
+# -------------------------------------------------------------
+# 5. Gerar Heatmap (Top 50 DEGs)
+# -------------------------------------------------------------
+top_genes <- res_table %>% head(50) %>% pull(gene_symbol)
+mat_heatmap <- v$E[top_genes, ]
+annotation_col <- data.frame(Group = metadata$group)
+rownames(annotation_col) <- metadata$sample_id
+
+png(paste0(out_prefix, "_heatmap.png"), width = 800, height = 900, res = 120)
+pheatmap(mat_heatmap, 
+         scale = "row", 
+         annotation_col = annotation_col,
+         show_colnames = TRUE,
+         main = paste("Heatmap Top 50 DEGs -", disease_label))
 dev.off()
 
-cat("[SUCCESS] Volcano plot salvo em:", paste0(out_prefix, "_volcano.pdf"), "\n")
+cat("[SUCCESS] Gráficos PCA, Volcano e Heatmap salvos em PNG.\n")

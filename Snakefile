@@ -39,21 +39,36 @@ rule run_exploratory_analysis_original:
         meta   = "metadata/{dataset}_samples.csv"
     output:
         deg     = "results/01_core_original/{dataset}/{dataset}_deg_results.csv",
-        volcano = "results/01_core_original/{dataset}/{dataset}_volcano.pdf"
+        pca     = "results/01_core_original/{dataset}/{dataset}_pca.png",
+        volcano = "results/01_core_original/{dataset}/{dataset}_volcano.png",
+        heatmap = "results/01_core_original/{dataset}/{dataset}_heatmap.png"
     shell:
         """
         Rscript scripts/02b_exploratory_deg.R \
             {input.counts} {input.meta} results/01_core_original/{wildcards.dataset}/{wildcards.dataset}
         """
 
-rule generate_html_report_phase01:
+# Regra explícita para a Análise de Interseção (Venn / UpSet)
+rule run_intersection_analysis:
     input:
-        degs = expand("results/01_core_original/{dataset}/{dataset}_deg_results.csv", dataset=DATASETS),
-        rmd  = "scripts/reports/01_core_original.Rmd"
+        degs = expand("results/01_core_original/{dataset}/{dataset}_deg_results.csv", dataset=DATASETS)
     output:
-        html = "reports/01_core_original.html"
+        venn = "results/01_core_original/intersection/venn_degs.png"
     shell:
         """
-        Rscript -e "rmarkdown::render('scripts/reports/01_core_original.Rmd')"
-        mv scripts/reports/01_core_original.html reports/01_core_original.html
+        Rscript scripts/03_intersection_analysis.R
+        """
+
+#Regra final para renderizar o relatório HTML completo
+rule generate_html_report_phase01:
+    input:
+        "results/01_core_original/GSE53697/GSE53697_deg_results.csv",
+        "results/01_core_original/GSE64810/GSE64810_deg_results.csv",
+        "results/01_core_original/GSE68719/GSE68719_deg_results.csv",
+        rmd = "scripts/reports/01_core_original.Rmd"
+    output:
+        "reports/01_core_original.html"
+    shell:
+        """
+        Rscript -e "rmarkdown::render('{input.rmd}', output_dir = 'reports')"
         """

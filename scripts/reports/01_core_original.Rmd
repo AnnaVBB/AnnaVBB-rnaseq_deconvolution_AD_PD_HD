@@ -1,22 +1,611 @@
 ---
-title: "Relatório Fase 01: Reprodução com Dados Originais do Núcleo"
+title: "Relatório da Fase 01: Linha de Base e Análise Exploratória (Dados Originais)"
+author: "Pipeline RNA-Seq Neurodegenerativo"
 date: "`r Sys.Date()`"
 output:
   html_document:
     theme: flatly
     toc: true
     toc_float: true
+    toc_depth: 3
     code_folding: hide
+    self_contained: true
 ---
 
-<!-- Reprodução do artigo, estudo do núcleo (usando os dados/matrizes originais deles). -->
-
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center"
+)
+
 library(dplyr)
 library(readr)
+library(ggplot2)
+library(knitr)
 library(DT)
 library(htmltools)
-library(ggplot2)
 
-datasets <- c("GSE53697", "GSE64810", "GSE68719")
+# Define a raiz como o diretório de onde o R/Snakemake foi chamado (raiz do projeto)
+knitr::opts_knit$set(root.dir = getwd())
+
+# ---------------------------------------------------------
+# Configuração dos datasets (Mapeamento Ajustado)
+# ---------------------------------------------------------
+datasets <- c(
+  "GSE53697",
+  "GSE64810",
+  "GSE68719"
+)
+
+disease_labels <- c(
+  GSE53697 = "Alzheimer's disease (AD)",
+  GSE64810 = "Huntington's disease (HD)",
+  GSE68719 = "Parkinson's disease (PD)"
+)
+
+disease_short <- c(
+  GSE53697 = "AD",
+  GSE64810 = "HD",
+  GSE68719 = "PD"
+)
+
+# Diretório principal dos resultados
+results_dir <- "results/01_core_original"
+```
+
+## 1. Introdução
+**1.1 Objetivo**
+
+A Fase 01 estabelece a linha de base (baseline) do projeto por meio da reprodução da análise de expressão diferencial utilizando as matrizes de contagens originais disponibilizadas pelos estudos do núcleo.
+Foram analisados três conjuntos de dados de RNA-seq provenientes de tecido cerebral pós-morte:
+
+GSE53697: doença de Alzheimer (AD);
+GSE64810: doença de Huntington (HD);
+GSE68719: doença de Parkinson (PD).
+
+O objetivo desta etapa é reproduzir a análise de expressão diferencial; avaliar a separação entre grupos por análise exploratória; identificar genes diferencialmente expressos em cada doença; caracterizar funcionalmente os genes diferencialmente expressos; investigar genes e processos biológicos compartilhados entre as três doenças.
+A análise desta fase utiliza as matrizes de contagens fornecidas pelos estudos, sem realizar novamente a quantificação a partir dos arquivos FASTQ. O processamento independente dos dados brutos será realizado em uma etapa posterior para comparação com os resultados aqui obtidos.
+
+## 2. Metodologia
+**2.1 Análise de expressão diferencial**
+As matrizes de contagens foram submetidas a filtragem de genes de baixa expressão e normalização pelo método Trimmed Mean of M-values (TMM) utilizando o pacote edgeR.
+A relação média-variância foi modelada utilizando limma-voom, seguida do ajuste de modelos lineares com lmFit e moderação Bayesiana dos erros com eBayes.
+Genes diferencialmente expressos foram definidos utilizando simultaneamente:
+FDR < 0.05;
+|log2 Fold Change| > 0.58.
+
+O segundo critério corresponde aproximadamente a uma mudança de expressão de pelo menos 1,5 vezes.
+
+**2.2 Análise exploratória**
+Para cada dataset foram avaliados:
+PCA, para visualizar a estrutura global dos dados e a separação entre grupos;
+Volcano plot, para visualizar simultaneamente magnitude do efeito e significância estatística;
+Heatmap, para visualizar os padrões de expressão dos principais genes diferencialmente expressos.
+
+**2.3 Enriquecimento funcional**
+Os genes diferencialmente expressos foram submetidos à análise de enriquecimento funcional do Gene Ontology (GO) e KEEG
+O enriquecimento foi avaliado separadamente para genes upregulated e downregulated, evitando misturar genes com efeitos biológicos potencialmente opostos.
+
+## 3. Visão geral dos datasets
+```{r section_3}
+dataset_summary <- data.frame(
+  Dataset = datasets,
+  Disease = unname(disease_labels[datasets]),
+  Code = unname(disease_short[datasets])
+)
+
+kable(
+  dataset_summary,
+  caption = "Datasets analisados na Fase 01."
+)
+```
+
+## 4. Resultados por doença
+### 4.1 Alzheimer — GSE53697
+**4.1.1 Resumo da expressão diferencial**
+```{r section_4}
+ds <- "GSE53697"
+
+csv_file <- file.path(results_dir, ds, paste0(ds, "_deg_results.csv"))
+
+if (file.exists(csv_file)) {
+  df <- read_csv(csv_file, show_col_types = FALSE)
+  
+  summary_table <- data.frame(
+    Métrica = c("Genes testados", "DEGs significativos", "Upregulated", "Downregulated"),
+    Valor = c(
+      nrow(df),
+      sum(df$adj.P.Val < 0.05 & abs(df$logFC) > 0.58, na.rm = TRUE),
+      sum(df$adj.P.Val < 0.05 & df$logFC > 0.58, na.rm = TRUE),
+      sum(df$adj.P.Val < 0.05 & df$logFC < -0.58, na.rm = TRUE)
+    )
+  )
+  kable(summary_table, caption = "Resumo da expressão diferencial — GSE53697 (AD)")
+} else {
+  cat("Resultados de expressão diferencial não encontrados para GSE53697.")
+}
+```
+
+**4.1.2 Análise exploratória e gráficos**
+```{r section_4_1_2}
+pca_img <- file.path(results_dir, "GSE53697", "GSE53697_pca.png")
+volcano_img <- file.path(results_dir, "GSE53697", "GSE53697_volcano.png")
+heatmap_img <- file.path(results_dir, "GSE53697", "GSE53697_heatmap.png")
+
+if (file.exists(pca_img)) knitr::include_graphics(pca_img) else cat("PCA não encontrado.")
+if (file.exists(volcano_img)) knitr::include_graphics(volcano_img) else cat("Volcano plot não encontrado.")
+if (file.exists(heatmap_img)) knitr::include_graphics(heatmap_img) else cat("Heatmap não encontrado.")
+```
+
+**4.1.3 Principais genes diferencialmente expressos (DEGs)**
+```{r section_4_1_3}
+if (file.exists(csv_file)) {
+  top_df <- df %>%
+    filter(adj.P.Val < 0.05, abs(logFC) > 0.58) %>%
+    arrange(adj.P.Val) %>%
+    select(gene_symbol, logFC, P.Value, adj.P.Val) %>%
+    head(20)
+
+  datatable(
+    top_df,
+    caption = "Top 20 DEGs — GSE53697 (AD)",
+    options = list(pageLength = 5, scrollX = TRUE)
+  )
+}
+```
+
+**4.1.4 Enriquecimento funcional**
+```{r section_4_1_4}
+enrichment_file <- file.path(results_dir, "GSE53697", "GSE53697_enrichment.csv")
+
+if (file.exists(enrichment_file)) {
+  enrichment <- read_csv(enrichment_file, show_col_types = FALSE)
+  datatable(
+    enrichment,
+    caption = "Enriquecimento Funcional — GSE53697 (AD)",
+    options = list(pageLength = 10, scrollX = TRUE)
+  )
+} else {
+  cat("Resultado de enriquecimento funcional não encontrado para GSE53697.")
+}
+```
+
+
+### 4.2 Huntington — GSE64810
+**4.2.1 Resumo da expressão diferencial**
+```{r section_4_2}
+ds <- "GSE64810"
+csv_file <- file.path(results_dir, ds, paste0(ds, "_deg_results.csv"))
+
+if (file.exists(csv_file)) {
+  df_hd <- read_csv(csv_file, show_col_types = FALSE)
+  
+  summary_table <- data.frame(
+    Métrica = c("Genes testados", "DEGs significativos", "Upregulated", "Downregulated"),
+    Valor = c(
+      nrow(df_hd),
+      sum(df_hd$adj.P.Val < 0.05 & abs(df_hd$logFC) > 0.58, na.rm = TRUE),
+      sum(df_hd$adj.P.Val < 0.05 & df_hd$logFC > 0.58, na.rm = TRUE),
+      sum(df_hd$adj.P.Val < 0.05 & df_hd$logFC < -0.58, na.rm = TRUE)
+    )
+  )
+  kable(summary_table, caption = "Resumo da expressão diferencial — GSE64810 (HD)")
+} else {
+  cat("Resultados de expressão diferencial não encontrados para GSE64810.")
+}
+```
+**4.2.2 Análise Exploratória e Gráficos**
+```{r section_4_2_2}
+pca_img <- file.path(results_dir, "GSE64810", "GSE64810_pca.png")
+volcano_img <- file.path(results_dir, "GSE64810", "GSE64810_volcano.png")
+heatmap_img <- file.path(results_dir, "GSE64810", "GSE64810_heatmap.png")
+
+if (file.exists(pca_img)) knitr::include_graphics(pca_img) else cat("PCA não encontrado.")
+if (file.exists(volcano_img)) knitr::include_graphics(volcano_img) else cat("Volcano plot não encontrado.")
+if (file.exists(heatmap_img)) knitr::include_graphics(heatmap_img) else cat("Heatmap não encontrado.")
+```
+
+**4.2.3 Principais DEGs**
+```{r section_4_2_3}
+if (exists("df_hd")) {
+  top_df <- df_hd %>%
+    filter(adj.P.Val < 0.05, abs(logFC) > 0.58) %>%
+    arrange(adj.P.Val) %>%
+    select(gene_symbol, logFC, P.Value, adj.P.Val) %>%
+    head(20)
+
+  datatable(
+    top_df,
+    caption = "Top 20 DEGs — GSE64810 (HD)",
+    options = list(pageLength = 5, scrollX = TRUE)
+  )
+}
+```
+
+**4.2.4 Enriquecimento funcional**
+```{r section_4_2_4}
+enrichment_file <- file.path(results_dir, "GSE64810", "GSE64810_enrichment.csv")
+
+if (file.exists(enrichment_file)) {
+  enrichment <- read_csv(enrichment_file, show_col_types = FALSE)
+  datatable(
+    enrichment,
+    caption = "Enriquecimento Funcional — GSE64810 (HD)",
+    options = list(pageLength = 10, scrollX = TRUE)
+  )
+} else {
+  cat("Resultado de enriquecimento funcional não encontrado para GSE64810.")
+}
+```
+
+### 4.3 Parkinson — GSE68719
+**4.3.1 Resumo da expressão diferencial**
+```{r section_4_3}
+ds <- "GSE68719"
+csv_file <- file.path(results_dir, ds, paste0(ds, "_deg_results.csv"))
+
+if (file.exists(csv_file)) {
+  df_pd <- read_csv(csv_file, show_col_types = FALSE)
+  
+  summary_table <- data.frame(
+    Métrica = c("Genes testados", "DEGs significativos", "Upregulated", "Downregulated"),
+    Valor = c(
+      nrow(df_pd),
+      sum(df_pd$adj.P.Val < 0.05 & abs(df_pd$logFC) > 0.58, na.rm = TRUE),
+      sum(df_pd$adj.P.Val < 0.05 & df_pd$logFC > 0.58, na.rm = TRUE),
+      sum(df_pd$adj.P.Val < 0.05 & df_pd$logFC < -0.58, na.rm = TRUE)
+    )
+  )
+  kable(summary_table, caption = "Resumo da expressão diferencial — GSE68719 (PD)")
+} else {
+  cat("Resultados de expressão diferencial não encontrados para GSE68719.")
+}
+```
+
+**4.3.2 Análise Exploratória e Gráficos**
+```{r section_4_3_2}
+pca_img <- file.path(results_dir, "GSE68719", "GSE68719_pca.png")
+volcano_img <- file.path(results_dir, "GSE68719", "GSE68719_volcano.png")
+heatmap_img <- file.path(results_dir, "GSE68719", "GSE68719_heatmap.png")
+
+if (file.exists(pca_img)) knitr::include_graphics(pca_img) else cat("PCA não encontrado.")
+if (file.exists(volcano_img)) knitr::include_graphics(volcano_img) else cat("Volcano plot não encontrado.")
+if (file.exists(heatmap_img)) knitr::include_graphics(heatmap_img) else cat("Heatmap não encontrado.")
+```
+
+**4.3.3 Principais DEGs**
+```{r section_4_3_3}
+if (exists("df_pd")) {
+  top_df <- df_pd %>%
+    filter(adj.P.Val < 0.05, abs(logFC) > 0.58) %>%
+    arrange(adj.P.Val) %>%
+    select(gene_symbol, logFC, P.Value, adj.P.Val) %>%
+    head(20)
+
+  datatable(
+    top_df,
+    caption = "Top 20 DEGs — GSE68719 (PD)",
+    options = list(pageLength = 5, scrollX = TRUE)
+  )
+}
+```
+
+**4.3.4 Enriquecimento funcional**
+```{r section_4_3_4}
+enrichment_file <- file.path(results_dir, "GSE68719", "GSE68719_enrichment.csv")
+
+if (file.exists(enrichment_file)) {
+  enrichment <- read_csv(enrichment_file, show_col_types = FALSE)
+  datatable(
+    enrichment,
+    caption = "Enriquecimento Funcional — GSE68719 (PD)",
+    options = list(pageLength = 10, scrollX = TRUE)
+  )
+} else {
+  cat("Resultado de enriquecimento funcional não encontrado para GSE68719.")
+}
+```
+
+## 5. Comparação entre as três doenças
+### 5.1 Número de DEGs
+```{r section_5_1}
+summary_all <- data.frame(
+  Dataset = datasets,
+  Disease = unname(disease_short[datasets]),
+  Total_DEGs = NA_integer_,
+  Upregulated = NA_integer_,
+  Downregulated = NA_integer_
+)
+
+for (i in seq_along(datasets)) {
+
+  ds <- datasets[i]
+
+  file <- file.path(
+    results_dir,
+    ds,
+    paste0(ds, "_deg_results.csv")
+  )
+
+  if (file.exists(file)) {
+
+    x <- read_csv(
+      file,
+      show_col_types = FALSE
+    )
+
+    summary_all$Total_DEGs[i] <- sum(
+      x$adj.P.Val < 0.05 &
+        abs(x$logFC) > 0.58,
+      na.rm = TRUE
+    )
+
+    summary_all$Upregulated[i] <- sum(
+      x$adj.P.Val < 0.05 &
+        x$logFC > 0.58,
+      na.rm = TRUE
+    )
+
+    summary_all$Downregulated[i] <- sum(
+      x$adj.P.Val < 0.05 &
+        x$logFC < -0.58,
+      na.rm = TRUE
+    )
+  }
+}
+
+kable(
+  summary_all,
+  caption = "Comparação do número de genes diferencialmente expressos por doença."
+)
+```
+
+### 5.2 Visualização da interseção
+```{r section_5_2}
+venn_path <- file.path(
+  results_dir,
+  "intersection",
+  "venn_degs.png"
+)
+
+if (file.exists(venn_path)) {
+  knitr::include_graphics(venn_path)
+} else {
+  cat("Diagrama de interseção não encontrado.")
+}
+```
+
+### 5.3 Genes diferencialmente expressos compartilhados
+A interseção foi definida utilizando os genes que satisfazem simultaneamente os critérios de significância estatística (FDR < 0.05) e magnitude de efeito em cada doença (|log2FC| > 0.58).
+```{r section_5_3}
+
+deg_lists <- list()
+for (ds in datasets) {
+
+  file <- file.path(
+    results_dir,
+    ds,
+    paste0(ds, "_deg_results.csv")
+  )
+
+  if (file.exists(file)) {
+
+    x <- read_csv(
+      file,
+      show_col_types = FALSE
+    )
+
+    deg_lists[[ds]] <- x %>%
+      filter(
+        adj.P.Val < 0.05,
+        abs(logFC) > 0.58
+      ) %>%
+      pull(gene_symbol) %>%
+      na.omit() %>%
+      unique()
+  }
+}
+
+common_genes <- Reduce(
+  intersect,
+  deg_lists
+)
+
+if (length(common_genes) > 0) {
+  common_table <- data.frame(gene_symbol = sort(common_genes))
+  datatable(
+    common_table,
+    caption = "Genes diferencialmente expressos compartilhados entre AD, HD e PD.",
+    options = list(pageLength = 10, scrollX = TRUE)
+  )
+}
+```
+
+## 6. Direção compartilhada da alteração
+
+A análise da direção do efeito é realizada separadamente para evitar que genes com alterações opostas entre doenças sejam interpretados como uma assinatura molecular comum.
+
+### 6.1 Genes upregulated nas três doenças
+```{r section_6_1}
+up_lists <- list()
+
+for (ds in datasets) {
+
+  file <- file.path(
+    results_dir,
+    ds,
+    paste0(ds, "_deg_results.csv")
+  )
+
+  if (file.exists(file)) {
+
+    x <- read_csv(
+      file,
+      show_col_types = FALSE
+    )
+
+    up_lists[[ds]] <- x %>%
+      filter(
+        adj.P.Val < 0.05,
+        logFC > 0.58
+      ) %>%
+      pull(gene_symbol) %>%
+      na.omit() %>%
+      unique()
+  }
+}
+
+shared_up <- Reduce(
+  intersect,
+  up_lists
+)
+
+cat(
+  "**Genes upregulated nas três doenças:** ",
+  length(shared_up)
+)
+```
+
+### 6.2 Genes downregulated nas três doenças
+```{r section_6_2}
+down_lists <- list()
+
+for (ds in datasets) {
+
+  file <- file.path(
+    results_dir,
+    ds,
+    paste0(ds, "_deg_results.csv")
+  )
+
+  if (file.exists(file)) {
+
+    x <- read_csv(
+      file,
+      show_col_types = FALSE
+    )
+
+    down_lists[[ds]] <- x %>%
+      filter(
+        adj.P.Val < 0.05,
+        logFC < -0.58
+      ) %>%
+      pull(gene_symbol) %>%
+      na.omit() %>%
+      unique()
+  }
+}
+
+shared_down <- Reduce(
+  intersect,
+  down_lists
+)
+
+cat(
+  "**Genes downregulated nas três doenças:** ",
+  length(shared_down)
+)
+```
+
+## 7. Enriquecimento funcional da interseção
+### 7.1 Todos os genes compartilhados
+```{r section_7_1}
+file <- file.path(
+  results_dir,
+  "intersection",
+  "common_genes_enrichment.csv"
+)
+
+if (file.exists(file)) {
+  x <- read_csv(
+    file,
+    show_col_types = FALSE
+  )
+
+  datatable(
+    x,
+    caption = "Enriquecimento funcional dos genes compartilhados entre AD, HD e PD.",
+    options = list(
+      pageLength = 15,
+      scrollX = TRUE
+    )
+  )
+
+} else {
+  cat(
+    "Resultado de enriquecimento da interseção não encontrado."
+  )
+}
+```
+
+### 7.2 Genes compartilhados upregulated
+```{r section_7_2}
+file <- file.path(
+  results_dir,
+  "intersection",
+  "shared_up_enrichment.csv"
+)
+
+if (file.exists(file)) {
+  x <- read_csv(
+    file,
+    show_col_types = FALSE
+  )
+
+  datatable(
+    x,
+    caption = "Enriquecimento funcional dos genes upregulated nas três doenças.",
+    options = list(
+      pageLength = 15,
+      scrollX = TRUE
+    )
+  )
+} else {
+  cat(
+    "Resultado de enriquecimento dos genes shared-up não encontrado."
+  )
+}
+```
+
+### 7.3 Genes compartilhados downregulated
+```{r section_7_3}
+file <- file.path(
+  results_dir,
+  "intersection",
+  "shared_down_enrichment.csv"
+)
+
+if (file.exists(file)) {
+  x <- read_csv(
+    file,
+    show_col_types = FALSE
+  )
+
+  datatable(
+    x,
+    caption = "Enriquecimento funcional dos genes downregulated nas três doenças.",
+    options = list(
+      pageLength = 15,
+      scrollX = TRUE
+    )
+  )
+
+} else {
+
+  cat(
+    "Resultado de enriquecimento dos genes shared-down não encontrado."
+  )
+}
+```
+
+## 8. Limitações
+Esta análise utiliza as matrizes de contagens disponibilizadas pelos estudos originais. Portanto, diferenças introduzidas nas etapas anteriores de processamento, alinhamento, quantificação ou controle de qualidade não podem ser avaliadas integralmente nesta fase.
+Além disso, os datasets apresentam diferenças em tecido/região cerebral, desenho experimental, composição amostral e características clínicas. Dessa forma, a comparação direta entre magnitudes de expressão diferencial deve ser interpretada com cautela.
+A análise de genes compartilhados também não deve ser interpretada isoladamente como evidência de um mecanismo molecular comum, uma vez que a interseção depende dos critérios estatísticos adotados e das características específicas de cada dataset.
+
+
+## 9. Conclusão da Fase 01
+A Fase 01 fornece a base necessária para avaliar a consistência das etapas subsequentes do projeto.
+Os resultados obtidos nesta etapa serão posteriormente comparados com aqueles produzidos a partir do processamento independente dos dados brutos, permitindo avaliar a reprodutibilidade do processamento e identificar possíveis diferenças decorrentes das etapas de quantificação e pré-processamento.
