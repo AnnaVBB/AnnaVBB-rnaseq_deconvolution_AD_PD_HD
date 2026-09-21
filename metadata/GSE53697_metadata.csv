@@ -1,0 +1,18 @@
+sample_id,geo_accession,title,group,raw_diagnosis,age,sex,rin,pmi,region
+C1_raw,GSM1885080,RNAseq_Ctrl_1,Control,control,NA,NA,NA,NA,dorsolateral prefrontal cortex
+C2_raw,GSM1885081,RNAseq_Ctrl_2,Control,control,NA,NA,NA,NA,dorsolateral prefrontal cortex
+C3_raw,GSM1885082,RNAseq_Ctrl_3,Control,control,NA,NA,NA,NA,dorsolateral prefrontal cortex
+C4_raw,GSM1885083,RNAseq_Ctrl_4,Control,control,NA,NA,NA,NA,dorsolateral prefrontal cortex
+C5_raw,GSM1885084,RNAseq_Ctrl_5,Control,control,NA,NA,NA,NA,dorsolateral prefrontal cortex
+C6_raw,GSM1885085,RNAseq_Ctrl_6,Control,control,NA,NA,NA,NA,dorsolateral prefrontal cortex
+C7_raw,GSM1885086,RNAseq_Ctrl_7,Control,control,NA,NA,NA,NA,dorsolateral prefrontal cortex
+C8_raw,GSM1885087,RNAseq_Ctrl_8,Control,control,NA,NA,NA,NA,dorsolateral prefrontal cortex
+A9_raw,GSM1885088,RNAseq_AD_9,AD,advanced Alzheimer's Disease,NA,NA,NA,NA,dorsolateral prefrontal cortex
+A10_raw,GSM1885089,RNAseq_AD_10,AD,advanced Alzheimer's Disease,NA,NA,NA,NA,dorsolateral prefrontal cortex
+A11_raw,GSM1885090,RNAseq_AD_11,AD,advanced Alzheimer's Disease,NA,NA,NA,NA,dorsolateral prefrontal cortex
+A12_raw,GSM1885091,RNAseq_AD_12,AD,advanced Alzheimer's Disease,NA,NA,NA,NA,dorsolateral prefrontal cortex
+A13_raw,GSM1885092,RNAseq_AD_13,AD,advanced Alzheimer's Disease,NA,NA,NA,NA,dorsolateral prefrontal cortex
+A14_raw,GSM1885093,RNAseq_AD_14,AD,advanced Alzheimer's Disease,NA,NA,NA,NA,dorsolateral prefrontal cortex
+A15_raw,GSM1885094,RNAseq_AD_15,AD,advanced Alzheimer's Disease,NA,NA,NA,NA,dorsolateral prefrontal cortex
+A16_raw,GSM1885095,RNAseq_AD_16,AD,advanced Alzheimer's Disease,NA,NA,NA,NA,dorsolateral prefrontal cortex
+A17_raw,GSM1885096,RNAseq_AD_17,AD,advanced Alzheimer's Disease,NA,NA,NA,NA,dorsolateral prefrontal cortex

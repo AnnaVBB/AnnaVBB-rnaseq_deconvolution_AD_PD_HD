@@ -1,86 +1,494 @@
 #!/usr/bin/env Rscript
+
+# ============================================================
+# 00_auditoria.R
+# Auditoria dos arquivos de expressão processados disponibilizados pelos estudos originais.
+#
+# Datasets:
+#   GSE53697 -> Alzheimer (AD)
+#   GSE64810 -> Huntington (HD)
+#   GSE68719 -> Parkinson (PD)
+#
+# Objetivo: verificar a integridade e a estrutura dos arquivos antes de qualquer processamento analítico.
+#
+# Uso:
+# Rscript scripts/00_auditoria.R \
+#   <dataset> \
+#   <expression_file> \
+#   <output_report>
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Pacotes
+# ------------------------------------------------------------
 suppressPackageStartupMessages({
   library(data.table)
-  library(GEOquery)
-  library(stringr)
-  library(dplyr)
 })
 
-#Recebe os argumentos passados para esse script pelo terminal 
-#trailingOnly= retorna apenas os argumentos fornecidos, ignorando os argumentos internos do script
+# ------------------------------------------------------------
+# 2. Argumentos
+# ------------------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 4) {
-  stop("Uso: Rscript 00_auditoria.R <counts.tsv.gz> <annot.tsv.gz> <soft.gz> <out_report.txt>") #Interrompe o processamento caso hajam arquivos inexistentes ou com ausência de algum dos argumentos 
+
+if (length(args) != 3) {
+  stop(
+    paste0(
+      "Uso:\n",
+      "Rscript scripts/00_auditoria.R ",
+      "<dataset> <expression_file> <output_report>\n\n",
+      "Exemplo:\n",
+      "Rscript scripts/00_auditoria.R ",
+      "GSE53697 ",
+      "data/raw/GSE53697/GSE53697_RNAseq_AD.txt.gz ",
+      "results/00_audit/GSE53697_audit.txt"
+    )
+  )
 }
 
-#counts, annotation, arquivo soft e arquivo de saída são necessários para este script
-counts_file <- args[1]
-annot_file  <- args[2]
-soft_file   <- args[3]
-output_txt  <- args[4]
+dataset <- args[1]
+expression_file <- args[2]
+output_report <- args[3]
 
-#Criação de um vetor vazio para elaborar um "rascunho" do relatório
-report_lines <- c() #c=combine --> cria elementos em um vetor
-add_to_report <- function(...) {
-  report_lines <<- c(report_lines, paste(...))
+
+# ------------------------------------------------------------
+# 3. Verificar dataset
+# ------------------------------------------------------------
+
+valid_datasets <- c(
+  "GSE53697",
+  "GSE64810",
+  "GSE68719"
+)
+
+if (!dataset %in% valid_datasets) {
+  stop(
+    "Dataset não reconhecido: ", dataset,
+    "\nDatasets permitidos: ",
+    paste(valid_datasets, collapse = ", ")
+  )
 }
 
-#Cabeçalho do relatório, registrando a data atual e os arquivos utilizados
-add_to_report("==================================================================")
-add_to_report("           RELATÓRIO DE AUDITORIA DE INTEGRIDADE DE DADOS         ")
-add_to_report("==================================================================")
-add_to_report("Data: ", as.character(Sys.time()))
-add_to_report("Counts: ", counts_file)
-add_to_report("Annot:  ", annot_file)
-add_to_report("SOFT:   ", soft_file)
-add_to_report("------------------------------------------------------------------\n")
 
-# 1. Auditoria de Counts
-add_to_report(">>> 1. AUDITORIA DA MATRIZ DE COUNTS")
-counts_df <- fread(cmd = paste("zcat", counts_file), data.table = FALSE) #O arquivo é descomprimido, a função fread() lê os arquivos como uma tabela e retorna um data.frame
-sample_cols <- colnames(counts_df)[-1] #Pega todas as colunas, menos a primeira 
-gene_ids <- counts_df[, 1] #pega todas as linhas da primeira coluna onde estão os identificadores dos genes
-
-add_to_report(" - Nome da coluna de ID: ", colnames(counts_df)[1]) #Verifica qual é a primeira coluna
-add_to_report(" - Total de genes (linhas): ", nrow(counts_df)) # Cada linha representa um gene, logo a soma corresponde a quantidade de genes
-add_to_report(" - Total de amostras (colunas): ", length(sample_cols)) #Possui as colunas depois de GeneID, seu tamanho corresponde ao número de amostras 
-add_to_report(" - GeneIDs duplicados: ", sum(duplicated(gene_ids))) #Verifica quais GeneIDs aparecem mais de uma vez através da soma de TRUE
-
-counts_mat <- as.matrix(counts_df[, -1]) #A primeira coluna é removida e o restante é transformado em matriz, deixando apenas os valores numéricos de expressão
-add_to_report(" - Valores ausentes (NA): ", sum(is.na(counts_mat))) #Se algum valor estiver ausente (NA), ele é marcado como TRUE. Depois os valores TRUE são somados. Para uma matriz de counts é esperado que os valores estejam preenchidos
-add_to_report(" - Contém valores negativos: ", any(counts_mat < 0, na.rm = TRUE)) #Verifica se há algum valor negativo, pos counts brutos não devem ser negativos
-
-lib_sizes <- colSums(counts_mat, na.rm = TRUE) #Representa o tamanho da biblioteca de cada amostra, ou seja, o total de reads/counts atribuídos aos genes na amostra
-add_to_report(" - Mediana do tamanho de biblioteca: ", format(median(lib_sizes), big.mark=".")) #Calcula a mediana dos tamanhos de biblioteca. Os números são formatados sem o .
-add_to_report("\n------------------------------------------------------------------\n")
-
-# 2. Auditoria de Anotação
-add_to_report(">>> 2. AUDITORIA DA ANOTAÇÃO GÊNICA")
-annot_df <- fread(cmd = paste("zcat", annot_file), data.table = FALSE) #Mesmo mecanismo usado para ler os counts, mas agora para a tabela de anotação dos genes 
-annot_id_col <- colnames(annot_df)[1] 
-
-add_to_report(" - Total de genes anotados: ", nrow(annot_df)) #quantos genes existem na anotação -atraves da contagem de linhas
-add_to_report(" - GeneIDs duplicados na anotação: ", sum(duplicated(annot_df[[annot_id_col]]))) #soma os IDs duplicados na anotação
-
-common_genes <- intersect(as.character(gene_ids), as.character(annot_df[[annot_id_col]])) #Encontra genes presentes nos dois arquivos, tanto na matriz de counts, quanto na anotação, selecionando a interseção (como texto para evitar diferenças de tipo)
-pct_mapped <- (length(common_genes) / length(gene_ids)) * 100 #Percentual mapeado, quantos % dos GeneIDs da matriz possuem correspondência com os da anotação
-add_to_report(" - Mapeamento com a matriz: ", length(common_genes), sprintf(" (%.2f%%)", pct_mapped))
-add_to_report("\n------------------------------------------------------------------\n")
-
-# 3. Auditoria do SOFT
-add_to_report(">>> 3. AUDITORIA DOS METADADOS (SOFT FILE)")
-gds <- getGEO(filename = soft_file) #A função getGEO() lê o arquivo soft e transforma suas informações em objetos que o R consegue manipular
-gsm_list <- GSMList(gds) #extraindo a lista de objetos correspondentes às amostras GSM
-soft_gsms <- names(gsm_list) #extrai os nomes das amostras
-
-add_to_report(" - Amostras no SOFT: ", length(soft_gsms)) #descreve quantas amostras estão descritas no SOFT
-add_to_report(" - GSMs pareadas (SOFT e Counts): ", length(intersect(sample_cols, soft_gsms))) # comparação dos GSMs na matriz com os do SOFT, idealmente devem conter o mesmo número
-
-missing_in_counts <- setdiff(soft_gsms, sample_cols) #significa que os elementos que estão em A, mas não em B
-add_to_report(" - GSMs no SOFT ausentes nos Counts: ", length(missing_in_counts))
-if (length(missing_in_counts) > 0) { #Verifica se pelo menos uma GSM está faltando
-  add_to_report("   [Ausentes]: ", paste(missing_in_counts, collapse = ", ")) #Se tiver algum GSM ausente, ele é relatado
+# ------------------------------------------------------------
+# 4. Verificar arquivo
+# ------------------------------------------------------------
+if (!file.exists(expression_file)) {
+  stop(
+    "Arquivo de expressão não encontrado:\n",
+    expression_file
+  )
 }
 
-writeLines(report_lines, con = output_txt)
-cat("[SUCCESS] Relatório de auditoria salvo em: ", output_txt, "\n")
+
+# ------------------------------------------------------------
+# 5. Criar diretório de saída
+# ------------------------------------------------------------
+output_dir <- dirname(output_report)
+
+if (!dir.exists(output_dir)) {
+  dir.create(
+    output_dir,
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+}
+
+
+# ------------------------------------------------------------
+# 6. Carregar arquivo
+# ------------------------------------------------------------
+cat("Carregando:", expression_file, "\n")
+
+expr <- fread(
+  expression_file,
+  check.names = FALSE
+)
+
+cat(
+  "Arquivo carregado:",
+  nrow(expr), "linhas x",
+  ncol(expr), "colunas\n"
+)
+
+
+# ------------------------------------------------------------
+# 7. Configuração específica por dataset
+# ------------------------------------------------------------
+# Cada estudo disponibilizou seus dados processados em um formato diferente.
+# Identificamos a coluna de gene, as colunas de expressão, os grupos e o número esperado de amostras
+
+if (dataset == "GSE53697") {
+  disease <- "AD"
+  gene_id_col <- "GeneID"
+  control_cols <- grep(
+    "^C[0-9]+_raw$",
+    colnames(expr),
+    value = TRUE
+  )
+
+  disease_cols <- grep(
+    "^A[0-9]+_raw$",
+    colnames(expr),
+    value = TRUE
+  )
+
+  expression_cols <- c(
+    control_cols,
+    disease_cols
+  )
+
+  expected_control <- 8
+  expected_disease <- 9
+  expected_total <- 17
+
+  matrix_description <- paste0(
+    "Raw-expression columns disponibilizadas pelos autores ",
+    "(sufixo _raw); o arquivo também contém RPKM."
+  )
+
+
+} else if (dataset == "GSE64810") {
+  disease <- "HD"
+  gene_id_col <- "V1"
+  control_cols <- grep(
+    "^C_",
+    colnames(expr),
+    value = TRUE
+  )
+
+  disease_cols <- grep(
+    "^H_",
+    colnames(expr),
+    value = TRUE
+  )
+
+  expression_cols <- c(
+    control_cols,
+    disease_cols
+  )
+
+  expected_control <- 49
+  expected_disease <- 20
+  expected_total <- 69
+
+  matrix_description <- paste0(
+    "Counts normalizados pelo DESeq2 ",
+    "disponibilizados pelos autores."
+  )
+
+
+} else if (dataset == "GSE68719") {
+  disease <- "PD"
+  gene_id_col <- "EnsemblID"
+  control_cols <- grep(
+    "^C_",
+    colnames(expr),
+    value = TRUE
+  )
+
+  disease_cols <- grep(
+    "^P_",
+    colnames(expr),
+    value = TRUE
+  )
+
+  expression_cols <- c(
+    control_cols,
+    disease_cols
+  )
+
+  expected_control <- 44
+  expected_disease <- 29
+  expected_total <- 73
+  matrix_description <- paste0(
+    "Counts normalizados pelo DESeq2 ",
+    "disponibilizados pelos autores."
+  )
+}
+
+
+# ------------------------------------------------------------
+# 8. Verificar coluna de identificador gênico
+# ------------------------------------------------------------
+if (!gene_id_col %in% colnames(expr)) {
+  stop(
+    "Coluna de identificador gênico esperada não encontrada: ",
+    gene_id_col
+  )
+}
+
+
+# ------------------------------------------------------------
+# 9. Verificar colunas de expressão
+# ------------------------------------------------------------
+if (length(expression_cols) == 0) {
+  stop(
+    "Nenhuma coluna de expressão foi identificada para ",
+    dataset
+  )
+}
+
+expr_matrix <- as.matrix(
+  expr[, ..expression_cols]
+)
+
+storage.mode(expr_matrix) <- "numeric"
+
+# ------------------------------------------------------------
+# 10. Estatísticas básicas
+# ------------------------------------------------------------
+n_genes <- nrow(expr)
+n_control <- length(control_cols)
+n_disease <- length(disease_cols)
+n_samples <- length(expression_cols)
+
+duplicated_gene_ids <- sum(
+  duplicated(expr[[gene_id_col]])
+)
+
+missing_gene_ids <- sum(
+  is.na(expr[[gene_id_col]]) |
+    trimws(as.character(expr[[gene_id_col]])) == ""
+)
+
+n_na <- sum(is.na(expr_matrix))
+
+n_negative <- sum(
+  expr_matrix < 0,
+  na.rm = TRUE
+)
+
+n_zero <- sum(
+  expr_matrix == 0,
+  na.rm = TRUE
+)
+
+n_values <- sum(!is.na(expr_matrix))
+
+zero_percentage <- if (n_values > 0) {
+  100 * n_zero / n_values
+} else {
+  NA_real_
+}
+
+
+# ------------------------------------------------------------
+# 11. Verificar valores inteiros
+# ------------------------------------------------------------
+finite_values <- expr_matrix[
+  is.finite(expr_matrix)
+]
+
+if (length(finite_values) > 0) {
+  integer_values <- abs(
+    finite_values - round(finite_values)
+  ) < 1e-8
+  all_integer <- all(integer_values)
+  non_integer_percentage <- 100 * mean(
+    !integer_values
+  )
+
+} else {
+  all_integer <- NA
+  non_integer_percentage <- NA_real_
+}
+
+
+# ------------------------------------------------------------
+# 12. Distribuição da expressão
+# ------------------------------------------------------------
+expression_summary <- summary(
+  as.numeric(expr_matrix)
+)
+
+# ------------------------------------------------------------
+# 13. Verificar número esperado de amostras
+# ------------------------------------------------------------
+control_ok <- n_control == expected_control
+disease_ok <- n_disease == expected_disease
+total_ok <- n_samples == expected_total
+
+# ------------------------------------------------------------
+# 14. Status geral
+# ------------------------------------------------------------
+critical_checks <- c(
+  duplicated_gene_ids == 0,
+  missing_gene_ids == 0,
+  n_na == 0,
+  n_negative == 0,
+  control_ok,
+  disease_ok,
+  total_ok
+)
+
+audit_status <- if (all(critical_checks)) {
+  "PASS"
+} else {
+  "CHECK"
+}
+
+# ------------------------------------------------------------
+# 15. Construir relatório
+# ------------------------------------------------------------
+report <- c(
+
+  "============================================================",
+  "AUDITORIA DOS DADOS DE EXPRESSÃO",
+  "============================================================",
+  "",
+
+  paste("Dataset:", dataset),
+  paste("Doença:", disease),
+  paste("Arquivo:", expression_file),
+  paste("Status geral:", audit_status),
+
+  "",
+  "------------------------------------------------------------",
+  "TIPO DE MATRIZ",
+  "------------------------------------------------------------",
+  "",
+
+  matrix_description,
+
+  "",
+  "IMPORTANTE:",
+  paste0(
+    "Esta auditoria descreve a matriz como disponibilizada ",
+    "pelos autores. Nenhuma normalização, transformação log2 ",
+    "ou filtragem foi realizada."
+  ),
+
+  "",
+  "------------------------------------------------------------",
+  "DIMENSÕES",
+  "------------------------------------------------------------",
+  "",
+
+  paste("Genes:", n_genes),
+  paste("Amostras de expressão:", n_samples),
+  paste("Controles:", n_control),
+  paste(disease, ":", n_disease),
+
+  "",
+  paste(
+    "Controles esperados:",
+    expected_control,
+    "->",
+    ifelse(control_ok, "OK", "CHECK")
+  ),
+
+  paste(
+    paste0(disease, " esperados:"),
+    expected_disease,
+    "->",
+    ifelse(disease_ok, "OK", "CHECK")
+  ),
+
+  paste(
+    "Total esperado:",
+    expected_total,
+    "->",
+    ifelse(total_ok, "OK", "CHECK")
+  ),
+
+  "",
+  "------------------------------------------------------------",
+  "IDENTIFICADORES GÊNICOS",
+  "------------------------------------------------------------",
+  "",
+
+  paste("Coluna de ID:", gene_id_col),
+  paste("IDs duplicados:", duplicated_gene_ids),
+  paste("IDs ausentes/vazios:", missing_gene_ids),
+
+  "",
+  "Primeiros IDs:",
+  paste(
+    head(as.character(expr[[gene_id_col]]), 10),
+    collapse = ", "
+  ),
+
+  "",
+  "------------------------------------------------------------",
+  "INTEGRIDADE DA MATRIZ",
+  "------------------------------------------------------------",
+  "",
+
+  paste("Valores NA:", n_na),
+  paste("Valores negativos:", n_negative),
+  paste("Valores iguais a zero:", n_zero),
+
+  paste0(
+    "Percentual de zeros: ",
+    round(zero_percentage, 2),
+    "%"
+  ),
+
+  paste(
+    "Todos os valores são inteiros:",
+    all_integer
+  ),
+
+  paste0(
+    "Percentual de valores não inteiros: ",
+    round(non_integer_percentage, 2),
+    "%"
+  ),
+
+  "",
+  "------------------------------------------------------------",
+  "DISTRIBUIÇÃO DOS VALORES DE EXPRESSÃO",
+  "------------------------------------------------------------",
+  "",
+
+  capture.output(
+    print(expression_summary)
+  ),
+
+  "",
+  "------------------------------------------------------------",
+  "AMOSTRAS",
+  "------------------------------------------------------------",
+  "",
+
+  "Controles:",
+  paste(control_cols, collapse = ", "),
+
+  "",
+  paste0(disease, ":"),
+  paste(disease_cols, collapse = ", "),
+
+  "",
+  "============================================================",
+  paste("RESULTADO FINAL:", audit_status),
+  "============================================================"
+)
+
+
+# ------------------------------------------------------------
+# 16. Salvar relatório
+# ------------------------------------------------------------
+writeLines(
+  report,
+  con = output_report
+)
+
+# ------------------------------------------------------------
+# 17. Mostrar resumo no terminal
+# ------------------------------------------------------------
+cat("\n")
+cat("============================================\n")
+cat("AUDITORIA CONCLUÍDA\n")
+cat("============================================\n")
+cat("Dataset:", dataset, "\n")
+cat("Genes:", n_genes, "\n")
+cat("Amostras:", n_samples, "\n")
+cat("Control:", n_control, "\n")
+cat(disease, ":", n_disease, "\n")
+cat("IDs duplicados:", duplicated_gene_ids, "\n")
+cat("NA:", n_na, "\n")
+cat("Negativos:", n_negative, "\n")
+cat("Todos inteiros:", all_integer, "\n")
+cat("Status:", audit_status, "\n")
+cat("\nRelatório salvo em:\n")
+cat(output_report, "\n")
