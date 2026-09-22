@@ -1,313 +1,837 @@
 #!/usr/bin/env Rscript
 
-suppressPackageStartupMessages({
-  library(clusterProfiler)
-  library(org.Hs.eg.db)
-  library(readr)
-  library(dplyr)
-  library(tibble)
-})
-
 # ============================================================
-# 02c_pathway_enrichment.R
+# 04_pathway_enrichment.R
+#[3]
+# Enriquecimento funcional dos DEGs principais:
+#   - GO Biological Process
+#   - KEGG
 #
-# Realiza análise de enriquecimento funcional GO Biological
-# Process (ORA - Over-Representation Analysis) a partir dos
-# genes diferencialmente expressos identificados no script 02b.
+# Estratégia:
+#   - entrada: deg_all.csv produzido por 03_exploratory_deg.R
+#   - DEG principal: adj.P.Val < 0.05 & |logFC| > 0.58
+#   - análises separadas:
+#       * todos os DEGs
+#       * genes Up
+#       * genes Down
+#   - background: todos os genes testados no próprio dataset
 #
-# O conjunto de genes testados na análise diferencial é usado
-# como universo/background do enriquecimento.
+# Uso:
+#
+# Rscript scripts/04_pathway_enrichment.R \
+#   GSE64810 \
+#   results/01_core_original/GSE64810/deg/deg_all.csv \
+#   results/01_core_original/GSE64810/enrichment
+#
 # ============================================================
 
 
 # ------------------------------------------------------------
-# 0. Receber argumentos do terminal
+# 1. Pacotes
+# ------------------------------------------------------------
+
+suppressPackageStartupMessages({
+  library(readr)
+  library(dplyr)
+  library(clusterProfiler)
+  library(org.Hs.eg.db)
+  library(enrichplot)
+  library(ggplot2)
+})
+
+
+# ------------------------------------------------------------
+# 2. Argumentos
 # ------------------------------------------------------------
 
 args <- commandArgs(trailingOnly = TRUE)
 
-if (length(args) < 2) {
+if (length(args) != 3) {
   stop(
-    "Uso: Rscript 02c_pathway_enrichment.R ",
-    "<deg_results.csv> <out_prefix>"
+    paste0(
+      "\nUso:\n",
+      "Rscript scripts/04_pathway_enrichment.R ",
+      "<dataset> <deg_all.csv> <output_dir>\n"
+    )
   )
 }
 
-deg_file   <- args[1]
-out_prefix <- args[2]
+dataset <- args[1]
+deg_file <- args[2]
+output_dir <- args[3]
 
 
 # ------------------------------------------------------------
-# 1. Carregar resultados da análise diferencial
+# 3. Configuração do dataset
 # ------------------------------------------------------------
 
-deg_res <- readr::read_csv(
-  deg_file,
-  show_col_types = FALSE
-)
+dataset_config <- list(
 
-# Verificar se as colunas necessárias estão presentes.
+  GSE53697 = list(
+    disease = "AD",
+    disease_label = "Alzheimer"
+  ),
 
-required_cols <- c(
-  "gene_symbol",
-  "logFC",
-  "adj.P.Val"
-)
+  GSE64810 = list(
+    disease = "HD",
+    disease_label = "Huntington"
+  ),
 
-missing_cols <- setdiff(
-  required_cols,
-  colnames(deg_res)
-)
-
-if (length(missing_cols) > 0) {
-  stop(
-    "Colunas necessárias ausentes no arquivo DEG: ",
-    paste(missing_cols, collapse = ", ")
+  GSE68719 = list(
+    disease = "PD",
+    disease_label = "Parkinson"
   )
+)
+
+if (!dataset %in% names(dataset_config)) {
+  stop("Dataset não reconhecido: ", dataset)
 }
 
+disease <- dataset_config[[dataset]]$disease
+disease_label <- dataset_config[[dataset]]$disease_label
+
 
 # ------------------------------------------------------------
-# 2. Definir arquivo de saída
+# 4. Diretórios
 # ------------------------------------------------------------
-
-go_out <- paste0(
-  out_prefix,
-  "_pathways_GO_BP.csv"
-)
-
-# Criar diretório de saída caso ainda não exista.
 
 dir.create(
-  dirname(go_out),
+  output_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+plot_dir <- file.path(
+  output_dir,
+  "plots"
+)
+
+dir.create(
+  plot_dir,
   recursive = TRUE,
   showWarnings = FALSE
 )
 
 
 # ------------------------------------------------------------
-# 3. Selecionar DEGs significativos
-#
-# Critérios definidos no projeto:
-# FDR < 0.05
-# |log2FC| > 0.58
+# 5. Ler DEG
 # ------------------------------------------------------------
 
-sig_res <- deg_res %>%
-  dplyr::filter(
-    !is.na(adj.P.Val),
-    !is.na(logFC),
-    adj.P.Val < 0.05,
-    abs(logFC) > 0.58
-  )
+message("Lendo: ", deg_file)
 
-cat(
-  "[INFO] Total de DEGs significativos:",
-  nrow(sig_res),
-  "\n"
+deg <- read_csv(
+  deg_file,
+  show_col_types = FALSE
 )
 
 
 # ------------------------------------------------------------
-# 4. Obter símbolos dos DEGs
+# 6. Validação
 # ------------------------------------------------------------
 
-sig_genes <- sig_res %>%
-  dplyr::filter(
-    !is.na(gene_symbol),
-    gene_symbol != "",
-    gene_symbol != "-"
-  ) %>%
-  dplyr::pull(gene_symbol) %>%
-  unique()
-
-cat(
-  "[INFO] Símbolos disponíveis para enriquecimento:",
-  length(sig_genes),
-  "\n"
+required_columns <- c(
+  "gene_id",
+  "logFC",
+  "P.Value",
+  "adj.P.Val",
+  "significant_primary",
+  "direction_primary"
 )
 
-
-# ------------------------------------------------------------
-# 5. Obter universo/background
-#
-# O arquivo produzido pelo 02b contém todos os genes que
-# permaneceram após a filtragem por expressão e foram testados
-# pelo limma-voom.
-#
-# Portanto, esses genes representam um background mais adequado
-# para a análise de enriquecimento do que utilizar todos os genes
-# presentes no banco org.Hs.eg.db.
-# ------------------------------------------------------------
-
-background_symbols <- deg_res %>%
-  dplyr::filter(
-    !is.na(gene_symbol),
-    gene_symbol != "",
-    gene_symbol != "-"
-  ) %>%
-  dplyr::pull(gene_symbol) %>%
-  unique()
-
-cat(
-  "[INFO] Símbolos disponíveis no background:",
-  length(background_symbols),
-  "\n"
+missing_columns <- setdiff(
+  required_columns,
+  colnames(deg)
 )
 
-
-# ------------------------------------------------------------
-# 6. Caso existam poucos DEGs, gerar arquivo vazio
-# ------------------------------------------------------------
-
-# Uma ORA com pouquíssimos genes tende a ser pouco informativa.
-# Mantemos o limite mínimo de 5 genes para prosseguir.
-
-if (length(sig_genes) < 5) {
-
-  warning(
-    "Poucos genes significativos disponíveis para enriquecimento."
-  )
-
-  readr::write_csv(
-    tibble::tibble(),
-    go_out
-  )
-
-  quit(
-    save = "no",
-    status = 0
+if (length(missing_columns) > 0) {
+  stop(
+    "Colunas ausentes no arquivo DEG: ",
+    paste(missing_columns, collapse = ", ")
   )
 }
 
 
 # ------------------------------------------------------------
-# 7. Converter DEGs de SYMBOL para ENTREZID
+# 7. Conferir genes principais
 # ------------------------------------------------------------
 
-gene_ids <- clusterProfiler::bitr(
-  sig_genes,
-  fromType = "SYMBOL",
-  toType = "ENTREZID",
-  OrgDb = org.Hs.eg.db
-) %>%
-  dplyr::distinct(
-    ENTREZID,
-    .keep_all = TRUE
+deg_primary <- deg %>%
+  filter(
+    significant_primary == TRUE
   )
 
-cat(
-  "[INFO] DEGs convertidos para ENTREZID:",
-  nrow(gene_ids),
-  "\n"
+deg_up <- deg_primary %>%
+  filter(
+    direction_primary == "Up"
+  )
+
+deg_down <- deg_primary %>%
+  filter(
+    direction_primary == "Down"
+  )
+
+message("")
+message("============================================")
+message("ENRIQUECIMENTO — ", dataset)
+message("============================================")
+message("Doença: ", disease_label)
+message("Genes testados: ", nrow(deg))
+message("DEGs principais: ", nrow(deg_primary))
+message("  Up: ", nrow(deg_up))
+message("  Down: ", nrow(deg_down))
+message("============================================")
+message("")
+
+
+# ------------------------------------------------------------
+# 8. Limpar Ensembl
+# ------------------------------------------------------------
+
+clean_ensembl <- function(x) {
+
+  x <- as.character(x)
+
+  x <- sub(
+    "\\..*$",
+    "",
+    x
+  )
+
+  x[
+    is.na(x) |
+    x == ""
+  ] <- NA_character_
+
+  x
+}
+
+
+deg <- deg %>%
+  mutate(
+    ensembl_clean = clean_ensembl(gene_id)
+  )
+
+deg_primary <- deg %>%
+  filter(
+    significant_primary == TRUE
+  )
+
+deg_up <- deg_primary %>%
+  filter(
+    direction_primary == "Up"
+  )
+
+deg_down <- deg_primary %>%
+  filter(
+    direction_primary == "Down"
+  )
+
+
+# ------------------------------------------------------------
+# 9. Conversão Ensembl -> Entrez
+# ------------------------------------------------------------
+
+convert_to_entrez <- function(ensembl_ids) {
+
+  ensembl_ids <- unique(
+    na.omit(
+      ensembl_ids
+    )
+  )
+
+  if (length(ensembl_ids) == 0) {
+
+    return(
+      tibble(
+        ENSEMBL = character(),
+        ENTREZID = character()
+      )
+    )
+  }
+
+  converted <- suppressMessages(
+    bitr(
+      ensembl_ids,
+      fromType = "ENSEMBL",
+      toType = "ENTREZID",
+      OrgDb = org.Hs.eg.db
+    )
+  )
+
+  converted %>%
+    distinct(
+      ENSEMBL,
+      ENTREZID
+    )
+}
+
+
+# ------------------------------------------------------------
+# 10. Background
+# ------------------------------------------------------------
+
+background_map <- convert_to_entrez(
+  deg$ensembl_clean
+)
+
+background_entrez <- unique(
+  background_map$ENTREZID
+)
+
+message(
+  "Genes no background com ENTREZ: ",
+  length(background_entrez)
 )
 
 
 # ------------------------------------------------------------
-# 8. Converter background de SYMBOL para ENTREZID
+# 11. Função para preparar conjunto de genes
 # ------------------------------------------------------------
 
-background_ids <- clusterProfiler::bitr(
-  background_symbols,
-  fromType = "SYMBOL",
-  toType = "ENTREZID",
-  OrgDb = org.Hs.eg.db
-) %>%
-  dplyr::distinct(
-    ENTREZID,
-    .keep_all = TRUE
+prepare_gene_set <- function(data) {
+
+  mapping <- convert_to_entrez(
+    data$ensembl_clean
   )
 
-cat(
-  "[INFO] Genes do background convertidos para ENTREZID:",
-  nrow(background_ids),
-  "\n"
+  unique(
+    mapping$ENTREZID
+  )
+}
+
+
+genes_all <- prepare_gene_set(
+  deg_primary
 )
 
+genes_up <- prepare_gene_set(
+  deg_up
+)
+
+genes_down <- prepare_gene_set(
+  deg_down
+)
+
+message("")
+message("DEGs convertidos para ENTREZ:")
+message("  All:  ", length(genes_all))
+message("  Up:   ", length(genes_up))
+message("  Down: ", length(genes_down))
+message("")
+
 
 # ------------------------------------------------------------
-# 9. Verificar se há genes suficientes após conversão
+# 12. Função: tabela vazia
 # ------------------------------------------------------------
 
-if (nrow(gene_ids) < 5) {
+empty_enrichment_table <- function() {
 
-  warning(
-    "Poucos DEGs puderam ser convertidos para ENTREZID."
-  )
-
-  readr::write_csv(
-    tibble::tibble(),
-    go_out
-  )
-
-  quit(
-    save = "no",
-    status = 0
+  tibble(
+    ID = character(),
+    Description = character(),
+    GeneRatio = character(),
+    BgRatio = character(),
+    pvalue = numeric(),
+    p.adjust = numeric(),
+    qvalue = numeric(),
+    geneID = character(),
+    Count = integer()
   )
 }
 
 
 # ------------------------------------------------------------
-# 10. GO Biological Process
-#
-# gene:
-#   DEGs significativos.
-#
-# universe:
-#   todos os genes testados na análise diferencial e que
-#   possuem anotação válida.
-#
-# ont = "BP":
-#   utiliza a ontologia Biological Process.
-#
-# pAdjustMethod = "BH":
-#   aplica correção de Benjamini-Hochberg.
+# 13. Função: GO Biological Process
 # ------------------------------------------------------------
 
-ego <- clusterProfiler::enrichGO(
-  gene = gene_ids$ENTREZID,
-  universe = background_ids$ENTREZID,
-  OrgDb = org.Hs.eg.db,
-  keyType = "ENTREZID",
-  ont = "BP",
-  pAdjustMethod = "BH",
-  pvalueCutoff = 0.05,
-  qvalueCutoff = 0.05,
-  readable = TRUE
+run_go_bp <- function(
+  genes,
+  universe
+) {
+
+  if (length(genes) < 2) {
+
+    message(
+      "GO BP não executado: menos de 2 genes."
+    )
+
+    return(
+      empty_enrichment_table()
+    )
+  }
+
+  result <- suppressMessages(
+    enrichGO(
+      gene = genes,
+      universe = universe,
+      OrgDb = org.Hs.eg.db,
+      keyType = "ENTREZID",
+      ont = "BP",
+      pAdjustMethod = "BH",
+      pvalueCutoff = 0.05,
+      qvalueCutoff = 0.05,
+      readable = TRUE
+    )
+  )
+
+  result_df <- as.data.frame(
+    result
+  )
+
+  if (nrow(result_df) == 0) {
+    return(
+      empty_enrichment_table()
+    )
+  }
+
+  as_tibble(
+    result_df
+  )
+}
+
+
+# ------------------------------------------------------------
+# 14. Função: KEGG
+# ------------------------------------------------------------
+
+run_kegg <- function(
+  genes,
+  universe
+) {
+
+  if (length(genes) < 2) {
+
+    message(
+      "KEGG não executado: menos de 2 genes."
+    )
+
+    return(
+      empty_enrichment_table()
+    )
+  }
+
+  result <- suppressMessages(
+    enrichKEGG(
+      gene = genes,
+      universe = universe,
+      organism = "hsa",
+      keyType = "ncbi-geneid",
+      pAdjustMethod = "BH",
+      pvalueCutoff = 0.05,
+      qvalueCutoff = 0.05
+    )
+  )
+
+  result_df <- as.data.frame(
+    result
+  )
+
+  if (nrow(result_df) == 0) {
+    return(
+      empty_enrichment_table()
+    )
+  }
+
+  as_tibble(
+    result_df
+  )
+}
+
+
+# ------------------------------------------------------------
+# 15. Executar enriquecimentos
+# ------------------------------------------------------------
+
+message("Executando GO BP...")
+
+go_all <- run_go_bp(
+  genes_all,
+  background_entrez
+)
+
+go_up <- run_go_bp(
+  genes_up,
+  background_entrez
+)
+
+go_down <- run_go_bp(
+  genes_down,
+  background_entrez
+)
+
+
+message("Executando KEGG...")
+
+kegg_all <- run_kegg(
+  genes_all,
+  background_entrez
+)
+
+kegg_up <- run_kegg(
+  genes_up,
+  background_entrez
+)
+
+kegg_down <- run_kegg(
+  genes_down,
+  background_entrez
 )
 
 
 # ------------------------------------------------------------
-# 11. Converter resultado para data.frame
+# 16. Salvar tabelas
 # ------------------------------------------------------------
 
-go_res <- as.data.frame(
-  ego
+write_csv(
+  go_all,
+  file.path(
+    output_dir,
+    "go_bp_all.csv"
+  )
 )
 
-cat(
-  "[INFO] Termos GO BP significativos encontrados:",
-  nrow(go_res),
-  "\n"
+write_csv(
+  go_up,
+  file.path(
+    output_dir,
+    "go_bp_up.csv"
+  )
+)
+
+write_csv(
+  go_down,
+  file.path(
+    output_dir,
+    "go_bp_down.csv"
+  )
+)
+
+write_csv(
+  kegg_all,
+  file.path(
+    output_dir,
+    "kegg_all.csv"
+  )
+)
+
+write_csv(
+  kegg_up,
+  file.path(
+    output_dir,
+    "kegg_up.csv"
+  )
+)
+
+write_csv(
+  kegg_down,
+  file.path(
+    output_dir,
+    "kegg_down.csv"
+  )
 )
 
 
 # ------------------------------------------------------------
-# 12. Salvar resultado
+# 17. Função para plotar resultados
+# ------------------------------------------------------------
+save_dotplot <- function(
+  enrichment_df,
+  title,
+  filename
+) {
+
+  if (nrow(enrichment_df) == 0) {
+
+    message(
+      "Plot não produzido: ",
+      title,
+      " — nenhum termo enriquecido."
+    )
+
+    return(
+      invisible(NULL)
+    )
+  }
+
+  plot_data <- enrichment_df %>%
+    arrange(
+      p.adjust
+    ) %>%
+    slice_head(
+      n = 15
+    ) %>%
+    mutate(
+      Description = factor(
+        Description,
+        levels = rev(
+          unique(Description)
+        )
+      ),
+      minus_log10_fdr = -log10(
+        pmax(
+          p.adjust,
+          .Machine$double.xmin
+        )
+      )
+    )
+
+  p <- ggplot(
+    plot_data,
+    aes(
+      x = minus_log10_fdr,
+      y = Description,
+      size = Count,
+      color = p.adjust
+    )
+  ) +
+    geom_point(
+      alpha = 0.85
+    ) +
+    scale_color_gradient(
+      low = "red",
+      high = "blue"
+    ) +
+    labs(
+      title = title,
+      x = expression(-log[10]("FDR")),
+      y = NULL,
+      size = "Genes",
+      color = "FDR"
+    ) +
+    theme_bw() +
+    theme(
+      axis.text.y = element_text(
+        size = 8
+      )
+    )
+
+  ggsave(
+    filename = filename,
+    plot = p,
+    width = 10,
+    height = 7,
+    dpi = 300
+  )
+}
+
+
+# ------------------------------------------------------------
+# 18. Plots GO
 # ------------------------------------------------------------
 
-# Mesmo quando nenhum termo significativo é encontrado,
-# o arquivo é criado. Isso é importante para manter o pipeline
-# reprodutível e permitir que o Snakemake reconheça a execução
-# da etapa.
-
-readr::write_csv(
-  go_res,
-  go_out
+save_dotplot(
+  go_all,
+  paste0(
+    dataset,
+    " — GO BP — todos os DEGs"
+  ),
+  file.path(
+    plot_dir,
+    "go_bp_all.png"
+  )
 )
 
-cat(
-  "[SUCCESS] GO Biological Process salvo em:",
-  go_out,
-  "\n"
+save_dotplot(
+  go_up,
+  paste0(
+    dataset,
+    " — GO BP — Up"
+  ),
+  file.path(
+    plot_dir,
+    "go_bp_up.png"
+  )
 )
+
+save_dotplot(
+  go_down,
+  paste0(
+    dataset,
+    " — GO BP — Down"
+  ),
+  file.path(
+    plot_dir,
+    "go_bp_down.png"
+  )
+)
+
+
+# ------------------------------------------------------------
+# 19. Plots KEGG
+# ------------------------------------------------------------
+
+save_dotplot(
+  kegg_all,
+  paste0(
+    dataset,
+    " — KEGG — todos os DEGs"
+  ),
+  file.path(
+    plot_dir,
+    "kegg_all.png"
+  )
+)
+
+save_dotplot(
+  kegg_up,
+  paste0(
+    dataset,
+    " — KEGG — Up"
+  ),
+  file.path(
+    plot_dir,
+    "kegg_up.png"
+  )
+)
+
+save_dotplot(
+  kegg_down,
+  paste0(
+    dataset,
+    " — KEGG — Down"
+  ),
+  file.path(
+    plot_dir,
+    "kegg_down.png"
+  )
+)
+
+
+# ------------------------------------------------------------
+# 20. Resumo
+# ------------------------------------------------------------
+
+summary_table <- tibble(
+
+  dataset = dataset,
+
+  disease = disease,
+
+  genes_tested = nrow(deg),
+
+  background_ensembl = length(
+    unique(
+      na.omit(
+        deg$ensembl_clean
+      )
+    )
+  ),
+
+  background_entrez = length(
+    background_entrez
+  ),
+
+  deg_total = nrow(
+    deg_primary
+  ),
+
+  deg_up = nrow(
+    deg_up
+  ),
+
+  deg_down = nrow(
+    deg_down
+  ),
+
+  deg_entrez_total = length(
+    genes_all
+  ),
+
+  deg_entrez_up = length(
+    genes_up
+  ),
+
+  deg_entrez_down = length(
+    genes_down
+  ),
+
+  mapping_rate_total = ifelse(
+  nrow(deg_primary) > 0,
+  length(genes_all) / nrow(deg_primary) * 100,
+  NA_real_
+  ),
+
+  mapping_rate_up = ifelse(
+    nrow(deg_up) > 0,
+    length(genes_up) / nrow(deg_up) * 100,
+    NA_real_
+  ),
+
+  mapping_rate_down = ifelse(
+    nrow(deg_down) > 0,
+    length(genes_down) / nrow(deg_down) * 100,
+    NA_real_
+  ),
+
+  go_all_terms = nrow(
+    go_all
+  ),
+
+  go_up_terms = nrow(
+    go_up
+  ),
+
+  go_down_terms = nrow(
+    go_down
+  ),
+
+  kegg_all_terms = nrow(
+    kegg_all
+  ),
+
+  kegg_up_terms = nrow(
+    kegg_up
+  ),
+
+  kegg_down_terms = nrow(
+    kegg_down
+  )
+)
+
+write_csv(
+  summary_table,
+  file.path(
+    output_dir,
+    "enrichment_summary.csv"
+  )
+)
+
+
+# ------------------------------------------------------------
+# 21. Resumo no terminal
+# ------------------------------------------------------------
+
+message("")
+message("============================================")
+message("ENRIQUECIMENTO FINALIZADO — ", dataset)
+message("============================================")
+
+message(
+  "Background ENTREZ: ",
+  length(background_entrez)
+)
+
+message(
+  "DEGs ENTREZ: ",
+  length(genes_all)
+)
+
+message("")
+message("GO BP:")
+message("  All:  ", nrow(go_all))
+message("  Up:   ", nrow(go_up))
+message("  Down: ", nrow(go_down))
+
+message("")
+message("KEGG:")
+message("  All:  ", nrow(kegg_all))
+message("  Up:   ", nrow(kegg_up))
+message("  Down: ", nrow(kegg_down))
+
+message("")
+message(
+  "Resultados: ",
+  output_dir
+)
+
+message("============================================")
