@@ -37,3 +37,10 @@ logs/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Dados de acesso controlado - Mathys 2019 / ROSMAP
+# Nunca versionar ou publicar
+/data/reference/mathys2019/
+
+# Arquivos temporarios de consulta ao Synapse
+/mathys2019_synapse_files.txt
