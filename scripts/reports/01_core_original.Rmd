@@ -1,5 +1,5 @@
 ---
-title: "Relatório da Fase 01: Linha de Base e Análise Exploratória (Dados Originais)"
+title: "Relatório da Fase 01: Análise de Expressão Diferencial e Integração Transdiagnóstica"
 author: "Pipeline RNA-Seq Neurodegenerativo"
 date: "`r Sys.Date()`"
 output:
@@ -14,25 +14,27 @@ output:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
-  echo = TRUE,
-  message = FALSE,
+  echo = FALSE,
   warning = FALSE,
-  fig.align = "center"
+  message = FALSE,
+  fig.align = "center",
+  out.width = "90%"
 )
 
-library(dplyr)
 library(readr)
-library(ggplot2)
+library(dplyr)
 library(knitr)
-library(DT)
-library(htmltools)
 
-# Define a raiz como o diretório de onde o R/Snakemake foi chamado (raiz do projeto)
-knitr::opts_knit$set(root.dir = getwd())
+# Este relatório deve ser renderizado a partir da raiz do repositório
+# com knit_root_dir = getwd().
+project_root <- normalizePath(getwd(), mustWork = TRUE)
 
-# ---------------------------------------------------------
-# Configuração dos datasets (Mapeamento Ajustado)
-# ---------------------------------------------------------
+results_dir <- file.path(
+  project_root,
+  "results",
+  "01_core_original"
+)
+
 datasets <- c(
   "GSE53697",
   "GSE64810",
@@ -51,561 +53,582 @@ disease_short <- c(
   GSE68719 = "PD"
 )
 
-# Diretório principal dos resultados
-results_dir <- "results/01_core_original"
+show_figure <- function(path) {
+  if (!file.exists(path)) {
+    cat("\n\n**Figura não encontrada:** `", path, "`\n\n", sep = "")
+    return(invisible(NULL))
+  }
+
+  abs_path <- normalizePath(path, mustWork = TRUE)
+
+  knitr::include_graphics(
+    abs_path,
+    rel_path = FALSE
+  )
+}
+
+read_if_exists <- function(path) {
+  if (file.exists(path)) {
+    readr::read_csv(path, show_col_types = FALSE)
+  } else {
+    NULL
+  }
+}
+
+deg_path <- function(dataset) {
+  file.path(results_dir, dataset, "deg", "deg_all.csv")
+}
+
+plot_path <- function(dataset, filename) {
+  file.path(results_dir, dataset, "plots", filename)
+}
+
+enrichment_path <- function(dataset, filename) {
+  file.path(results_dir, dataset, "enrichment", "plots", filename)
+}
+
+summarize_deg <- function(x) {
+  if (is.null(x) || nrow(x) == 0) {
+    return(c(
+      Genes_testados = NA_integer_,
+      DEGs_principais = NA_integer_,
+      Upregulated = NA_integer_,
+      Downregulated = NA_integer_,
+      DEGs_criterio_comparativo = NA_integer_
+    ))
+  }
+
+  c(
+    Genes_testados = nrow(x),
+    DEGs_principais = sum(x$adj.P.Val < 0.05 & abs(x$logFC) > 0.58, na.rm = TRUE),
+    Upregulated = sum(x$adj.P.Val < 0.05 & x$logFC > 0.58, na.rm = TRUE),
+    Downregulated = sum(x$adj.P.Val < 0.05 & x$logFC < -0.58, na.rm = TRUE),
+    DEGs_criterio_comparativo = sum(x$P.Value < 0.05 & abs(x$logFC) > 1, na.rm = TRUE)
+  )
+}
 ```
 
-## 1. Introdução
-**1.1 Objetivo**
+# 1. Introdução
+## 1.1 Objetivo
+A Fase 01 estabelece a linha de base do projeto por meio da reanálise das matrizes de expressão disponibilizadas pelos estudos originais para três doenças neurodegenerativas:
 
-A Fase 01 estabelece a linha de base (baseline) do projeto por meio da reprodução da análise de expressão diferencial utilizando as matrizes de contagens originais disponibilizadas pelos estudos do núcleo.
-Foram analisados três conjuntos de dados de RNA-seq provenientes de tecido cerebral pós-morte:
+- GSE53697 — doença de Alzheimer (AD);
 
-GSE53697: doença de Alzheimer (AD);
-GSE64810: doença de Huntington (HD);
-GSE68719: doença de Parkinson (PD).
+- GSE64810 — doença de Huntington (HD);
 
-O objetivo desta etapa é reproduzir a análise de expressão diferencial; avaliar a separação entre grupos por análise exploratória; identificar genes diferencialmente expressos em cada doença; caracterizar funcionalmente os genes diferencialmente expressos; investigar genes e processos biológicos compartilhados entre as três doenças.
-A análise desta fase utiliza as matrizes de contagens fornecidas pelos estudos, sem realizar novamente a quantificação a partir dos arquivos FASTQ. O processamento independente dos dados brutos será realizado em uma etapa posterior para comparação com os resultados aqui obtidos.
+- GSE68719 — doença de Parkinson (PD).
 
-## 2. Metodologia
-**2.1 Análise de expressão diferencial**
-As matrizes de contagens foram submetidas a filtragem de genes de baixa expressão e normalização pelo método Trimmed Mean of M-values (TMM) utilizando o pacote edgeR.
-A relação média-variância foi modelada utilizando limma-voom, seguida do ajuste de modelos lineares com lmFit e moderação Bayesiana dos erros com eBayes.
-Genes diferencialmente expressos foram definidos utilizando simultaneamente:
-FDR < 0.05;
-|log2 Fold Change| > 0.58.
+O objetivo desta etapa é avaliar individualmente os padrões de expressão diferencial de cada doença e, posteriormente, investigar a existência de alterações transcriptômicas compartilhadas entre os três contextos neurodegenerativos.
+A análise compreende controle e exploração da estrutura dos dados, análise de expressão diferencial, enriquecimento funcional por Gene Ontology (GO) e KEGG e integração transdiagnóstica dos resultados.
+Nesta fase são utilizadas as matrizes de expressão processadas disponibilizadas pelos estudos originais. O reprocessamento independente dos dados a partir dos arquivos FASTQ será realizado posteriormente, permitindo avaliar a influência das etapas de quantificação e pré-processamento sobre os resultados.
 
-O segundo critério corresponde aproximadamente a uma mudança de expressão de pelo menos 1,5 vezes.
+# 2. Metodologia
+## 2.1 Preparação das matrizes de expressão
+Os três datasets apresentam formatos de expressão distintos, refletindo as estratégias de processamento adotadas nos estudos originais. Nesta primeira fase, foram utilizadas as matrizes de expressão processadas e disponibilizadas pelos respectivos estudos, preservando-se, tanto quanto possível, o universo gênico originalmente fornecido.
+Para o dataset de doença de Alzheimer (GSE53697), foram utilizadas as medidas de RPKM disponibilizadas pelos autores. Genes com expressão igual a zero em todas as amostras foram removidos antes das análises subsequentes. Em seguida, os valores de expressão foram transformados segundo:
 
-**2.2 Análise exploratória**
-Para cada dataset foram avaliados:
-PCA, para visualizar a estrutura global dos dados e a separação entre grupos;
-Volcano plot, para visualizar simultaneamente magnitude do efeito e significância estatística;
-Heatmap, para visualizar os padrões de expressão dos principais genes diferencialmente expressos.
+\[
+\log_2(\mathrm{RPKM} + 1)
+\]
 
-**2.3 Enriquecimento funcional**
-Os genes diferencialmente expressos foram submetidos à análise de enriquecimento funcional do Gene Ontology (GO) e KEEG
-O enriquecimento foi avaliado separadamente para genes upregulated e downregulated, evitando misturar genes com efeitos biológicos potencialmente opostos.
+Após a remoção dos genes sem expressão, foram mantidos 18.611 genes para as análises.
 
-## 3. Visão geral dos datasets
-```{r section_3}
+Para os datasets de doença de Huntington (GSE64810) e doença de Parkinson (GSE68719), foram utilizadas as matrizes de contagens normalizadas por DESeq2 disponibilizadas pelos estudos originais. Como essas matrizes já haviam passado por normalização, não foi aplicada uma nova normalização por TMM, DESeq2 ou outro método. Os valores foram transformados segundo:
+
+\[
+\log_2(\mathrm{normalized\ counts} + 1)
+\]
+
+Foram mantidos 28.087 genes no dataset de Huntington e 17.580 genes no dataset de Parkinson.
+Devido às diferenças no processamento original e nas unidades de expressão entre os datasets, as matrizes foram analisadas separadamente. Dessa forma, não foram realizadas comparações diretas das magnitudes absolutas de expressão entre os três estudos.
+
+## 2.2 Análise de expressão diferencial
+A análise de expressão diferencial foi realizada separadamente para cada dataset utilizando modelos lineares implementados no pacote `limma`.
+Para cada estudo, foi ajustado um modelo contendo o grupo diagnóstico como variável de interesse:
+\[
+\mathrm{expression} \sim \mathrm{group}
+\]
+
+O contraste de interesse foi definido como:
+
+\[
+\mathrm{Disease} - \mathrm{Control}
+\]
+
+Assim, valores positivos de `logFC` representam maior expressão no grupo da doença em relação ao grupo controle, enquanto valores negativos representam menor expressão no grupo da doença.
+Após o ajuste dos modelos com `lmFit`, foi aplicada moderação Bayesiana utilizando `eBayes(trend = TRUE)`.
+Foram utilizados dois critérios para classificação dos genes diferencialmente expressos.
+
+### Critério principal
+Um gene foi considerado diferencialmente expresso pelo critério principal quando apresentou simultaneamente:
+- FDR (`adj.P.Val`) < 0,05;
+- |logFC| > 0,58.
+O limiar de |logFC| > 0,58 corresponde aproximadamente a uma alteração de 1,5 vez na expressão.
+Este critério foi utilizado como definição principal de significância nas análises de expressão diferencial, enriquecimento funcional e integração entre os datasets.
+
+### Critério comparativo
+Também foi aplicado um segundo critério, utilizado para comparação com abordagens baseadas em significância nominal:
+- `P.Value` < 0,05;
+- |logFC| > 1.
+Esse critério foi mantido separado do critério principal e utilizado como análise comparativa, não substituindo a definição principal baseada em FDR.
+
+## 2.3 Análise de enriquecimento funcional
+As análises de enriquecimento funcional foram realizadas a partir dos genes diferencialmente expressos identificados pelo critério principal.
+Os identificadores gênicos foram convertidos para identificadores Entrez quando necessário, permitindo a utilização das bases de anotação empregadas pelo `clusterProfiler`.
+Foram avaliados:
+
+- Gene Ontology — Biological Process (GO BP);
+
+- Kyoto Encyclopedia of Genes and Genomes (KEGG).
+
+As análises foram realizadas considerando o conjunto total de genes diferencialmente expressos e, adicionalmente, os genes upregulated e downregulated separadamente.
+Para o dataset de Alzheimer (GSE53697), não foram identificados genes diferencialmente expressos pelo critério principal. Consequentemente, não foram realizadas análises de enriquecimento GO ou KEGG para esse dataset.
+
+## 2.4 Integração entre os datasets
+Como os três estudos apresentam universos gênicos distintos, a integração foi realizada somente após a harmonização dos identificadores gênicos
+Os identificadores Ensembl válidos e únicos de cada dataset foram utilizados para determinar o universo gênico comum testável entre Alzheimer, Huntington e Parkinson. A interseção entre os três estudos resultou em 16.100 genes presentes e testados em todos os datasets.
+A integração foi realizada a partir dos resultados das análises de expressão diferencial individuais, sem concatenar as matrizes de expressão dos diferentes estudos.
+
+Para cada gene do universo comum, foram comparados:
+- `logFC`;
+- `P.Value`;
+- `adj.P.Val`;
+- classificação de significância segundo os critérios principal e comparativo;
+- direção da alteração de expressão.
+As sobreposições de genes diferencialmente expressos foram avaliadas entre os três datasets e representadas por diagramas de Venn. A concordância da direção dos efeitos também foi investigada por meio da comparação dos valores de `logFC`.
+Genes que apresentaram o mesmo sinal de `logFC` nos três datasets foram considerados direcionalmente concordantes. Essa classificação representa concordância na direção da alteração de expressão e não implica, necessariamente, significância estatística nos três estudos.
+
+## 2.5 Considerações sobre a estratégia analítica
+Esta etapa corresponde à primeira fase da análise e utiliza dados processados pelos estudos originais. Consequentemente, existem diferenças entre os datasets quanto à forma de quantificação, normalização e universo gênico disponível.
+Por esse motivo, as análises de expressão diferencial foram realizadas independentemente para cada estudo, e a integração foi baseada nos resultados estatísticos e no universo gênico comum, em vez da comparação direta dos valores absolutos de expressão.
+Em uma etapa posterior, os dados brutos de RNA-seq serão reprocessados por um pipeline padronizado, permitindo avaliar o impacto das diferenças de processamento sobre os resultados obtidos nesta primeira fase.
+
+# 3. Visão geral dos datasets
+```{r dataset-summary}
 dataset_summary <- data.frame(
   Dataset = datasets,
-  Disease = unname(disease_labels[datasets]),
-  Code = unname(disease_short[datasets])
+  Doença = unname(disease_labels[datasets]),
+  Código = unname(disease_short[datasets])
 )
 
 kable(
   dataset_summary,
   caption = "Datasets analisados na Fase 01."
 )
+
 ```
 
-## 4. Resultados por doença
-### 4.1 Alzheimer — GSE53697
-**4.1.1 Resumo da expressão diferencial**
-```{r section_4}
-ds <- "GSE53697"
+# 4. Resultados por doença
 
-csv_file <- file.path(results_dir, ds, paste0(ds, "_deg_results.csv"))
+## 4.1 Alzheimer — GSE53697
 
-if (file.exists(csv_file)) {
-  df <- read_csv(csv_file, show_col_types = FALSE)
-  
+## 4.1.1 Expressão diferencial
+
+```{r ad-deg-summary}
+ad <- read_if_exists(deg_path("GSE53697"))
+
+if (!is.null(ad)) {
+  stats <- summarize_deg(ad)
+
   summary_table <- data.frame(
-    Métrica = c("Genes testados", "DEGs significativos", "Upregulated", "Downregulated"),
-    Valor = c(
-      nrow(df),
-      sum(df$adj.P.Val < 0.05 & abs(df$logFC) > 0.58, na.rm = TRUE),
-      sum(df$adj.P.Val < 0.05 & df$logFC > 0.58, na.rm = TRUE),
-      sum(df$adj.P.Val < 0.05 & df$logFC < -0.58, na.rm = TRUE)
-    )
+    Métrica = c(
+      "Genes testados",
+      "DEGs — critério principal",
+      "Upregulated — principal",
+      "Downregulated — principal",
+      "DEGs — critério comparativo"
+    ),
+    Valor = unname(stats)
   )
-  kable(summary_table, caption = "Resumo da expressão diferencial — GSE53697 (AD)")
-} else {
-  cat("Resultados de expressão diferencial não encontrados para GSE53697.")
+
+  kable(summary_table, caption = "Resumo da expressão diferencial — GSE53697 (AD).")
 }
 ```
 
-**4.1.2 Análise exploratória e gráficos**
-```{r section_4_1_2}
-pca_img <- file.path(results_dir, "GSE53697", "GSE53697_pca.png")
-volcano_img <- file.path(results_dir, "GSE53697", "GSE53697_volcano.png")
-heatmap_img <- file.path(results_dir, "GSE53697", "GSE53697_heatmap.png")
+No dataset de Alzheimer, nenhum gene atingiu simultaneamente os critérios de FDR < 0,05 e |logFC| > 0,58. Portanto, não foi identificada uma assinatura de expressão diferencial estatisticamente significativa segundo o critério principal.
+Esse resultado é mantido como parte da análise e não foram relaxados os limiares estatísticos para produzir artificialmente uma lista de DEGs.
 
-if (file.exists(pca_img)) knitr::include_graphics(pca_img) else cat("PCA não encontrado.")
-if (file.exists(volcano_img)) knitr::include_graphics(volcano_img) else cat("Volcano plot não encontrado.")
-if (file.exists(heatmap_img)) knitr::include_graphics(heatmap_img) else cat("Heatmap não encontrado.")
-```
+## 4.1.2 PCA
 
-**4.1.3 Principais genes diferencialmente expressos (DEGs)**
-```{r section_4_1_3}
-if (file.exists(csv_file)) {
-  top_df <- df %>%
-    filter(adj.P.Val < 0.05, abs(logFC) > 0.58) %>%
-    arrange(adj.P.Val) %>%
-    select(gene_symbol, logFC, P.Value, adj.P.Val) %>%
-    head(20)
-
-  datatable(
-    top_df,
-    caption = "Top 20 DEGs — GSE53697 (AD)",
-    options = list(pageLength = 5, scrollX = TRUE)
+```{r ad-pca, fig.cap="Análise de componentes principais (PCA) — GSE53697 (AD)."}
+show_figure(
+  plot_path(
+    "GSE53697",
+    "pca.png"
   )
-}
-```
-
-**4.1.4 Enriquecimento funcional**
-```{r section_4_1_4}
-enrichment_file <- file.path(results_dir, "GSE53697", "GSE53697_enrichment.csv")
-
-if (file.exists(enrichment_file)) {
-  enrichment <- read_csv(enrichment_file, show_col_types = FALSE)
-  datatable(
-    enrichment,
-    caption = "Enriquecimento Funcional — GSE53697 (AD)",
-    options = list(pageLength = 10, scrollX = TRUE)
-  )
-} else {
-  cat("Resultado de enriquecimento funcional não encontrado para GSE53697.")
-}
-```
-
-
-### 4.2 Huntington — GSE64810
-**4.2.1 Resumo da expressão diferencial**
-```{r section_4_2}
-ds <- "GSE64810"
-csv_file <- file.path(results_dir, ds, paste0(ds, "_deg_results.csv"))
-
-if (file.exists(csv_file)) {
-  df_hd <- read_csv(csv_file, show_col_types = FALSE)
-  
-  summary_table <- data.frame(
-    Métrica = c("Genes testados", "DEGs significativos", "Upregulated", "Downregulated"),
-    Valor = c(
-      nrow(df_hd),
-      sum(df_hd$adj.P.Val < 0.05 & abs(df_hd$logFC) > 0.58, na.rm = TRUE),
-      sum(df_hd$adj.P.Val < 0.05 & df_hd$logFC > 0.58, na.rm = TRUE),
-      sum(df_hd$adj.P.Val < 0.05 & df_hd$logFC < -0.58, na.rm = TRUE)
-    )
-  )
-  kable(summary_table, caption = "Resumo da expressão diferencial — GSE64810 (HD)")
-} else {
-  cat("Resultados de expressão diferencial não encontrados para GSE64810.")
-}
-```
-**4.2.2 Análise Exploratória e Gráficos**
-```{r section_4_2_2}
-pca_img <- file.path(results_dir, "GSE64810", "GSE64810_pca.png")
-volcano_img <- file.path(results_dir, "GSE64810", "GSE64810_volcano.png")
-heatmap_img <- file.path(results_dir, "GSE64810", "GSE64810_heatmap.png")
-
-if (file.exists(pca_img)) knitr::include_graphics(pca_img) else cat("PCA não encontrado.")
-if (file.exists(volcano_img)) knitr::include_graphics(volcano_img) else cat("Volcano plot não encontrado.")
-if (file.exists(heatmap_img)) knitr::include_graphics(heatmap_img) else cat("Heatmap não encontrado.")
-```
-
-**4.2.3 Principais DEGs**
-```{r section_4_2_3}
-if (exists("df_hd")) {
-  top_df <- df_hd %>%
-    filter(adj.P.Val < 0.05, abs(logFC) > 0.58) %>%
-    arrange(adj.P.Val) %>%
-    select(gene_symbol, logFC, P.Value, adj.P.Val) %>%
-    head(20)
-
-  datatable(
-    top_df,
-    caption = "Top 20 DEGs — GSE64810 (HD)",
-    options = list(pageLength = 5, scrollX = TRUE)
-  )
-}
-```
-
-**4.2.4 Enriquecimento funcional**
-```{r section_4_2_4}
-enrichment_file <- file.path(results_dir, "GSE64810", "GSE64810_enrichment.csv")
-
-if (file.exists(enrichment_file)) {
-  enrichment <- read_csv(enrichment_file, show_col_types = FALSE)
-  datatable(
-    enrichment,
-    caption = "Enriquecimento Funcional — GSE64810 (HD)",
-    options = list(pageLength = 10, scrollX = TRUE)
-  )
-} else {
-  cat("Resultado de enriquecimento funcional não encontrado para GSE64810.")
-}
-```
-
-### 4.3 Parkinson — GSE68719
-**4.3.1 Resumo da expressão diferencial**
-```{r section_4_3}
-ds <- "GSE68719"
-csv_file <- file.path(results_dir, ds, paste0(ds, "_deg_results.csv"))
-
-if (file.exists(csv_file)) {
-  df_pd <- read_csv(csv_file, show_col_types = FALSE)
-  
-  summary_table <- data.frame(
-    Métrica = c("Genes testados", "DEGs significativos", "Upregulated", "Downregulated"),
-    Valor = c(
-      nrow(df_pd),
-      sum(df_pd$adj.P.Val < 0.05 & abs(df_pd$logFC) > 0.58, na.rm = TRUE),
-      sum(df_pd$adj.P.Val < 0.05 & df_pd$logFC > 0.58, na.rm = TRUE),
-      sum(df_pd$adj.P.Val < 0.05 & df_pd$logFC < -0.58, na.rm = TRUE)
-    )
-  )
-  kable(summary_table, caption = "Resumo da expressão diferencial — GSE68719 (PD)")
-} else {
-  cat("Resultados de expressão diferencial não encontrados para GSE68719.")
-}
-```
-
-**4.3.2 Análise Exploratória e Gráficos**
-```{r section_4_3_2}
-pca_img <- file.path(results_dir, "GSE68719", "GSE68719_pca.png")
-volcano_img <- file.path(results_dir, "GSE68719", "GSE68719_volcano.png")
-heatmap_img <- file.path(results_dir, "GSE68719", "GSE68719_heatmap.png")
-
-if (file.exists(pca_img)) knitr::include_graphics(pca_img) else cat("PCA não encontrado.")
-if (file.exists(volcano_img)) knitr::include_graphics(volcano_img) else cat("Volcano plot não encontrado.")
-if (file.exists(heatmap_img)) knitr::include_graphics(heatmap_img) else cat("Heatmap não encontrado.")
-```
-
-**4.3.3 Principais DEGs**
-```{r section_4_3_3}
-if (exists("df_pd")) {
-  top_df <- df_pd %>%
-    filter(adj.P.Val < 0.05, abs(logFC) > 0.58) %>%
-    arrange(adj.P.Val) %>%
-    select(gene_symbol, logFC, P.Value, adj.P.Val) %>%
-    head(20)
-
-  datatable(
-    top_df,
-    caption = "Top 20 DEGs — GSE68719 (PD)",
-    options = list(pageLength = 5, scrollX = TRUE)
-  )
-}
-```
-
-**4.3.4 Enriquecimento funcional**
-```{r section_4_3_4}
-enrichment_file <- file.path(results_dir, "GSE68719", "GSE68719_enrichment.csv")
-
-if (file.exists(enrichment_file)) {
-  enrichment <- read_csv(enrichment_file, show_col_types = FALSE)
-  datatable(
-    enrichment,
-    caption = "Enriquecimento Funcional — GSE68719 (PD)",
-    options = list(pageLength = 10, scrollX = TRUE)
-  )
-} else {
-  cat("Resultado de enriquecimento funcional não encontrado para GSE68719.")
-}
-```
-
-## 5. Comparação entre as três doenças
-### 5.1 Número de DEGs
-```{r section_5_1}
-summary_all <- data.frame(
-  Dataset = datasets,
-  Disease = unname(disease_short[datasets]),
-  Total_DEGs = NA_integer_,
-  Upregulated = NA_integer_,
-  Downregulated = NA_integer_
 )
 
-for (i in seq_along(datasets)) {
+```
 
-  ds <- datasets[i]
+## 4.1.3 Volcano plots
+### Critério principal
 
-  file <- file.path(
-    results_dir,
-    ds,
-    paste0(ds, "_deg_results.csv")
+```{r ad-volcano-primary, fig.cap="Volcano plot segundo o critério principal — GSE53697 (AD)."}
+show_figure(
+  plot_path(
+    "GSE53697",
+    "volcano_primary.png"
+  )
+)
+
+```
+
+### Critério comparativo
+```{r ad-volcano-article, fig.cap="Volcano plot segundo o critério comparativo (p < 0,05 e |logFC| > 1) — GSE53697 (AD)."}
+show_figure(
+  plot_path(
+    "GSE53697",
+    "volcano_article.png"
+  )
+)
+
+```
+
+## 4.1.4 Heatmap
+Não foi produzido heatmap baseado nos DEGs principais para o dataset GSE53697, pois nenhum gene atingiu o critério principal de significância.
+A ausência dessa figura é, portanto, consequência direta do resultado da análise diferencial e não representa falha no pipeline.
+
+## 4.1.5 Enriquecimento funcional
+Como nenhum gene foi classificado como diferencialmente expresso segundo o critério principal, não foi realizada interpretação de enriquecimento GO BP ou KEGG para Alzheimer.
+A realização de enriquecimento sem uma lista de DEGs que satisfaça o critério previamente estabelecido exigiria a alteração posterior dos limiares estatísticos e, por isso, não foi adotada.
+
+## 4.2 Huntington — GSE64810
+
+## 4.2.1 Expressão diferencial
+
+```{r hd-deg-summary}
+hd <- read_if_exists(deg_path("GSE64810"))
+if (!is.null(hd)) {
+  stats <- summarize_deg(hd)
+  summary_table <- data.frame(
+    Métrica = c(
+      "Genes testados",
+      "DEGs — critério principal",
+      "Upregulated — principal",
+      "Downregulated — principal",
+      "DEGs — critério comparativo"
+    ),
+    Valor = unname(stats)
+  )
+  kable(summary_table, caption = "Resumo da expressão diferencial — GSE64810 (HD).")
+}
+```
+
+## 4.2.2 PCA
+```{r hd-pca, fig.cap="Análise de componentes principais (PCA) — GSE64810 (HD)."}
+show_figure(
+  plot_path(
+    "GSE64810",
+    "pca.png"
+  )
+)
+
+```
+
+## 4.2.3 Volcano plots
+### Critério principal
+```{r hd-volcano-primary, fig.cap="Volcano plot segundo o critério principal — GSE64810 (HD)."}
+show_figure(
+  plot_path(
+    "GSE64810",
+    "volcano_primary.png"
+  )
+)
+
+```
+
+### Critério comparativo
+```{r hd-volcano-article, fig.cap="Volcano plot segundo o critério comparativo (p < 0,05 e |logFC| > 1) — GSE64810 (HD)."}
+show_figure(
+  plot_path(
+    "GSE64810",
+    "volcano_article.png"
+  )
+)
+
+```
+
+## 4.2.4 Heatmap
+```{r hd-heatmap, fig.cap="Heatmap dos principais genes diferencialmente expressos — GSE64810 (HD)."}
+show_figure(
+  plot_path(
+    "GSE64810",
+    "heatmap_top50_primary.png"
+  )
+)
+
+```
+
+## 4.2.5 Enriquecimento GO BP
+```{r hd-go, fig.cap="Enriquecimento funcional Gene Ontology Biological Process — GSE64810 (HD)."}
+show_figure(
+  enrichment_path(
+    "GSE64810",
+    "go_bp_all.png"
+  )
+)
+
+```
+
+## 4.2.6 Enriquecimento KEGG
+```{r hd-kegg, fig.cap="Enriquecimento de vias KEGG — GSE64810 (HD)."}
+show_figure(
+  enrichment_path(
+    "GSE64810",
+    "kegg_all.png"
+  )
+)
+
+```
+
+## 4.3 Parkinson — GSE68719
+## 4.3.1 Expressão diferencial
+```{r pd-deg-summary}
+pd <- read_if_exists(deg_path("GSE68719"))
+
+if (!is.null(pd)) {
+  stats <- summarize_deg(pd)
+
+  summary_table <- data.frame(
+    Métrica = c(
+      "Genes testados",
+      "DEGs — critério principal",
+      "Upregulated — principal",
+      "Downregulated — principal",
+      "DEGs — critério comparativo"
+    ),
+    Valor = unname(stats)
   )
 
-  if (file.exists(file)) {
-
-    x <- read_csv(
-      file,
-      show_col_types = FALSE
-    )
-
-    summary_all$Total_DEGs[i] <- sum(
-      x$adj.P.Val < 0.05 &
-        abs(x$logFC) > 0.58,
-      na.rm = TRUE
-    )
-
-    summary_all$Upregulated[i] <- sum(
-      x$adj.P.Val < 0.05 &
-        x$logFC > 0.58,
-      na.rm = TRUE
-    )
-
-    summary_all$Downregulated[i] <- sum(
-      x$adj.P.Val < 0.05 &
-        x$logFC < -0.58,
-      na.rm = TRUE
-    )
-  }
+  kable(summary_table, caption = "Resumo da expressão diferencial — GSE68719 (PD).")
 }
+```
+
+## 4.3.2 PCA
+```{r pd-pca, fig.cap="Análise de componentes principais (PCA) — GSE68719 (PD)."}
+show_figure(
+  plot_path(
+    "GSE68719",
+    "pca.png"
+  )
+)
+
+```
+
+## 4.3.3 Volcano plots
+### Critério principal
+
+```{r pd-volcano-primary, fig.cap="Volcano plot segundo o critério principal — GSE68719 (PD)."}
+show_figure(
+  plot_path(
+    "GSE68719",
+    "volcano_primary.png"
+  )
+)
+
+```
+### Critério comparativo
+```{r pd-volcano-article, fig.cap="Volcano plot segundo o critério comparativo (p < 0,05 e |logFC| > 1) — GSE68719 (PD)."}
+show_figure(
+  plot_path(
+    "GSE68719",
+    "volcano_article.png"
+  )
+)
+
+```
+
+## 4.3.4 Heatmap
+```{r pd-heatmap, fig.cap="Heatmap dos principais genes diferencialmente expressos — GSE68719 (PD)."}
+show_figure(
+  plot_path(
+    "GSE68719",
+    "heatmap_top50_primary.png"
+  )
+
+)
+
+```
+
+## 4.3.5 Enriquecimento GO BP
+```{r pd-go, fig.cap="Enriquecimento funcional Gene Ontology Biological Process — GSE68719 (PD)."}
+show_figure(
+  enrichment_path(
+    "GSE68719",
+    "go_bp_all.png"
+  )
+
+)
+
+```
+
+## 4.3.6 Enriquecimento KEGG
+```{r pd-kegg, fig.cap="Enriquecimento de vias KEGG — GSE68719 (PD)."}
+show_figure(
+  enrichment_path(
+    "GSE68719",
+    "kegg_all.png"
+  )
+)
+```
+
+# 5. Comparação entre as doenças
+## 5.1 Expressão diferencial
+```{r comparison-deg}
+ad_stats <- summarize_deg(ad)
+hd_stats <- summarize_deg(hd)
+pd_stats <- summarize_deg(pd)
+
+deg_comparison <- data.frame(
+  Doença = c("AD", "HD", "PD"),
+  Genes_testados = c(ad_stats["Genes_testados"], hd_stats["Genes_testados"], pd_stats["Genes_testados"]),
+  DEGs_principais = c(ad_stats["DEGs_principais"], hd_stats["DEGs_principais"], pd_stats["DEGs_principais"]),
+  Upregulated = c(ad_stats["Upregulated"], hd_stats["Upregulated"], pd_stats["Upregulated"]),
+  Downregulated = c(ad_stats["Downregulated"], hd_stats["Downregulated"], pd_stats["Downregulated"]),
+  DEGs_criterio_comparativo = c(
+    ad_stats["DEGs_criterio_comparativo"],
+    hd_stats["DEGs_criterio_comparativo"],
+    pd_stats["DEGs_criterio_comparativo"]
+  )
+)
 
 kable(
-  summary_all,
-  caption = "Comparação do número de genes diferencialmente expressos por doença."
+  deg_comparison,
+  caption = "Comparação dos resultados de expressão diferencial."
 )
 ```
 
-### 5.2 Visualização da interseção
-```{r section_5_2}
-venn_path <- file.path(
+Os três datasets apresentaram comportamentos distintos. Alzheimer não apresentou genes significativos segundo o critério principal, enquanto Huntington e Parkinson apresentaram conjuntos substanciais de genes diferencialmente expressos.
+Essas diferenças devem ser interpretadas considerando as características particulares de cada estudo, incluindo tamanho amostral, processamento original, universo gênico e variabilidade biológica e técnica.
+
+# 6. Integração transdiagnóstica
+## 6.1 Universo comum testável
+
+```{r intersection-summary}
+intersection_dir <- file.path(
   results_dir,
-  "intersection",
-  "venn_degs.png"
+  "intersection"
 )
 
-if (file.exists(venn_path)) {
-  knitr::include_graphics(venn_path)
-} else {
-  cat("Diagrama de interseção não encontrado.")
-}
-```
-
-### 5.3 Genes diferencialmente expressos compartilhados
-A interseção foi definida utilizando os genes que satisfazem simultaneamente os critérios de significância estatística (FDR < 0.05) e magnitude de efeito em cada doença (|log2FC| > 0.58).
-```{r section_5_3}
-
-deg_lists <- list()
-for (ds in datasets) {
-
-  file <- file.path(
-    results_dir,
-    ds,
-    paste0(ds, "_deg_results.csv")
+intersection_summary <- read_if_exists(
+  file.path(
+    intersection_dir,
+    "intersection_summary.csv"
   )
 
-  if (file.exists(file)) {
-
-    x <- read_csv(
-      file,
-      show_col_types = FALSE
-    )
-
-    deg_lists[[ds]] <- x %>%
-      filter(
-        adj.P.Val < 0.05,
-        abs(logFC) > 0.58
-      ) %>%
-      pull(gene_symbol) %>%
-      na.omit() %>%
-      unique()
-  }
-}
-
-common_genes <- Reduce(
-  intersect,
-  deg_lists
 )
 
-if (length(common_genes) > 0) {
-  common_table <- data.frame(gene_symbol = sort(common_genes))
-  datatable(
-    common_table,
-    caption = "Genes diferencialmente expressos compartilhados entre AD, HD e PD.",
-    options = list(pageLength = 10, scrollX = TRUE)
-  )
-}
-```
-
-## 6. Direção compartilhada da alteração
-
-A análise da direção do efeito é realizada separadamente para evitar que genes com alterações opostas entre doenças sejam interpretados como uma assinatura molecular comum.
-
-### 6.1 Genes upregulated nas três doenças
-```{r section_6_1}
-up_lists <- list()
-
-for (ds in datasets) {
-
-  file <- file.path(
-    results_dir,
-    ds,
-    paste0(ds, "_deg_results.csv")
+common_universe <- read_if_exists(
+  file.path(
+    intersection_dir,
+    "common_testable_universe.csv"
   )
 
-  if (file.exists(file)) {
-
-    x <- read_csv(
-      file,
-      show_col_types = FALSE
-    )
-
-    up_lists[[ds]] <- x %>%
-      filter(
-        adj.P.Val < 0.05,
-        logFC > 0.58
-      ) %>%
-      pull(gene_symbol) %>%
-      na.omit() %>%
-      unique()
-  }
-}
-
-shared_up <- Reduce(
-  intersect,
-  up_lists
 )
 
-cat(
-  "**Genes upregulated nas três doenças:** ",
-  length(shared_up)
-)
-```
-
-### 6.2 Genes downregulated nas três doenças
-```{r section_6_2}
-down_lists <- list()
-
-for (ds in datasets) {
-
-  file <- file.path(
-    results_dir,
-    ds,
-    paste0(ds, "_deg_results.csv")
-  )
-
-  if (file.exists(file)) {
-
-    x <- read_csv(
-      file,
-      show_col_types = FALSE
-    )
-
-    down_lists[[ds]] <- x %>%
-      filter(
-        adj.P.Val < 0.05,
-        logFC < -0.58
-      ) %>%
-      pull(gene_symbol) %>%
-      na.omit() %>%
-      unique()
-  }
-}
-
-shared_down <- Reduce(
-  intersect,
-  down_lists
-)
-
-cat(
-  "**Genes downregulated nas três doenças:** ",
-  length(shared_down)
-)
-```
-
-## 7. Enriquecimento funcional da interseção
-### 7.1 Todos os genes compartilhados
-```{r section_7_1}
-file <- file.path(
-  results_dir,
-  "intersection",
-  "common_genes_enrichment.csv"
-)
-
-if (file.exists(file)) {
-  x <- read_csv(
-    file,
-    show_col_types = FALSE
-  )
-
-  datatable(
-    x,
-    caption = "Enriquecimento funcional dos genes compartilhados entre AD, HD e PD.",
-    options = list(
-      pageLength = 15,
-      scrollX = TRUE
-    )
-  )
-
-} else {
+if (!is.null(common_universe)) {
   cat(
-    "Resultado de enriquecimento da interseção não encontrado."
-  )
-}
-```
-
-### 7.2 Genes compartilhados upregulated
-```{r section_7_2}
-file <- file.path(
-  results_dir,
-  "intersection",
-  "shared_up_enrichment.csv"
-)
-
-if (file.exists(file)) {
-  x <- read_csv(
-    file,
-    show_col_types = FALSE
-  )
-
-  datatable(
-    x,
-    caption = "Enriquecimento funcional dos genes upregulated nas três doenças.",
-    options = list(
-      pageLength = 15,
-      scrollX = TRUE
+    "Número de genes no universo comum testável:",
+    format(
+      nrow(common_universe),
+      big.mark = ".",
+      decimal.mark = ","
     )
   )
-} else {
-  cat(
-    "Resultado de enriquecimento dos genes shared-up não encontrado."
-  )
 }
+
 ```
 
-### 7.3 Genes compartilhados downregulated
-```{r section_7_3}
-file <- file.path(
-  results_dir,
-  "intersection",
-  "shared_down_enrichment.csv"
+A integração foi restrita aos genes testáveis nos três datasets. Essa estratégia evita classificar como não significativo em uma doença um gene que, na realidade, não fazia parte do universo analisado naquele dataset.
+O universo comum foi composto por **16.100 genes**.
+Dentro desse universo, foram identificados:
+
+- 0 DEGs principais em AD;
+
+- 1.265 DEGs principais em HD;
+
+- 2.102 DEGs principais em PD.
+
+## 6.2 Interseção — critério principal
+```{r venn-primary, fig.cap="Interseção dos genes diferencialmente expressos entre AD, HD e PD segundo o critério principal."}
+show_figure(
+  file.path(
+    intersection_dir,
+    "plots",
+    "venn_primary_AD_HD_PD.png"
+  )
 )
 
-if (file.exists(file)) {
-  x <- read_csv(
-    file,
-    show_col_types = FALSE
-  )
-
-  datatable(
-    x,
-    caption = "Enriquecimento funcional dos genes downregulated nas três doenças.",
-    options = list(
-      pageLength = 15,
-      scrollX = TRUE
-    )
-  )
-
-} else {
-
-  cat(
-    "Resultado de enriquecimento dos genes shared-down não encontrado."
-  )
-}
 ```
 
-## 8. Limitações
-Esta análise utiliza as matrizes de contagens disponibilizadas pelos estudos originais. Portanto, diferenças introduzidas nas etapas anteriores de processamento, alinhamento, quantificação ou controle de qualidade não podem ser avaliadas integralmente nesta fase.
-Além disso, os datasets apresentam diferenças em tecido/região cerebral, desenho experimental, composição amostral e características clínicas. Dessa forma, a comparação direta entre magnitudes de expressão diferencial deve ser interpretada com cautela.
-A análise de genes compartilhados também não deve ser interpretada isoladamente como evidência de um mecanismo molecular comum, uma vez que a interseção depende dos critérios estatísticos adotados e das características específicas de cada dataset.
+Segundo o critério principal, não foram identificados genes diferencialmente expressos simultaneamente nas três doenças devido à ausência de DEGs significativos em Alzheimer.
+Entretanto, **553 genes foram compartilhados entre Huntington e Parkinson** dentro do universo comum testável.
+Além disso:
 
+- 712 genes foram específicos de HD;
 
-## 9. Conclusão da Fase 01
-A Fase 01 fornece a base necessária para avaliar a consistência das etapas subsequentes do projeto.
-Os resultados obtidos nesta etapa serão posteriormente comparados com aqueles produzidos a partir do processamento independente dos dados brutos, permitindo avaliar a reprodutibilidade do processamento e identificar possíveis diferenças decorrentes das etapas de quantificação e pré-processamento.
+- 1.549 genes foram específicos de PD;
+
+- 553 genes foram compartilhados entre HD e PD.
+
+Todos os 553 genes compartilhados entre HD e PD apresentaram alteração na mesma direção nas duas doenças.
+
+## 6.3 Interseção — critério comparativo
+```{r venn-article, fig.cap="Interseção dos genes segundo o critério comparativo (p < 0,05 e |logFC| > 1)."}
+show_figure(
+  file.path(
+    intersection_dir,
+    "plots",
+    "venn_article_AD_HD_PD.png"
+  )
+)
+
+```
+
+O critério comparativo produz um padrão de interseção diferente do observado com o critério principal.
+Nesse cenário foram observados:
+
+- 162 genes compartilhados entre HD e PD;
+
+- 1 gene compartilhado entre AD e PD;
+
+- 1 gene compartilhado entre AD, HD e PD.
+
+Esses resultados são apresentados como análise comparativa e não substituem a definição principal de DEG utilizada no estudo.
+
+# 7. Concordância dos efeitos entre HD e PD
+Como Huntington e Parkinson apresentaram a principal interseção observada pelo critério primário, a relação entre os efeitos de expressão foi examinada diretamente por meio dos valores de logFC.
+
+```{r hd-pd-scatter, fig.cap="Relação entre os efeitos de expressão (logFC) observados em Huntington e Parkinson no universo comum testável."}
+show_figure(
+  file.path(
+    intersection_dir,
+    "plots",
+    "logFC_HD_vs_PD.png"
+  )
+
+)
+
+```
+
+Os genes compartilhados entre HD e PD pelo critério principal apresentaram concordância completa de direção: os 553 genes compartilhados apresentaram efeitos no mesmo sentido nas duas doenças, enquanto nenhum apresentou direção oposta.
+Separadamente, considerando apenas a direção do efeito e independentemente da significância estatística, **5.204 genes apresentaram o mesmo sinal de logFC nos três datasets**. Esse número não deve ser interpretado como 5.204 DEGs transdiagnósticos, pois não incorpora o critério de significância estatística.
+
+# 8. Enriquecimento funcional
+As análises de enriquecimento mostraram que os conjuntos de genes diferencialmente expressos em Huntington e Parkinson estão associados a múltiplos processos biológicos e vias moleculares.
+A interpretação dessas análises deve considerar que o número de genes mapeados para os identificadores utilizados pelas bases funcionais varia entre datasets. Essa diferença é particularmente relevante para Huntington, cujo universo original inclui uma proporção maior de genes sem correspondência direta nos identificadores utilizados nas análises de enriquecimento.
+Para Alzheimer, não foi realizada interpretação de enriquecimento pelo critério principal devido à ausência de DEGs significativos.
+Os resultados de GO BP e KEGG apresentados nas seções individuais devem ser interpretados como caracterização funcional dos conjuntos de DEGs de HD e PD, e não como evidência direta de vias compartilhadas entre as três doenças.
+
+# 9. Limitações
+A Fase 01 utiliza matrizes de expressão processadas disponibilizadas pelos estudos originais. Consequentemente, diferenças introduzidas durante alinhamento, quantificação, filtragem ou normalização original não podem ser completamente controladas nesta etapa.
+Além disso, as escalas absolutas de expressão não são diretamente comparáveis entre os três datasets, uma vez que Alzheimer foi analisado a partir de RPKM, enquanto Huntington e Parkinson utilizam contagens normalizadas por DESeq2.
+Os datasets também apresentam diferenças em tamanho amostral, composição clínica, disponibilidade de covariáveis e universo gênico. Particularmente, o dataset de Parkinson está restrito a genes codificadores de proteínas, justificando o uso de um universo comum testável na análise de interseção.
+A ausência de DEGs significativos em Alzheimer pelo critério principal limita a identificação de uma assinatura estatisticamente significativa compartilhada simultaneamente entre AD, HD e PD nesta fase.
+Por fim, concordância na direção do efeito não é equivalente a significância estatística compartilhada. Assim, os 5.204 genes com direção concordante nos três datasets não são classificados como DEGs transdiagnósticos.
+
+# 10. Conclusão da Fase 01
+A análise individual identificou comportamentos transcriptômicos distintos entre os três datasets. Huntington e Parkinson apresentaram conjuntos substanciais de genes diferencialmente expressos segundo o critério principal, enquanto Alzheimer não apresentou genes que satisfizessem simultaneamente os limiares estabelecidos de FDR e magnitude de efeito.
+A integração utilizando um universo comum de 16.100 genes identificou **553 DEGs compartilhados entre Huntington e Parkinson**, todos apresentando concordância na direção do efeito.
+Não foram identificados DEGs compartilhados simultaneamente entre AD, HD e PD segundo o critério principal. Dessa forma, os resultados atuais não sustentam, nesta fase, uma assinatura de expressão diferencial estatisticamente significativa comum às três doenças sob os critérios adotados.
+Os resultados estabelecem uma linha de base para as etapas seguintes do projeto, incluindo a deconvolução da composição celular e, posteriormente, o reprocessamento padronizado dos dados de RNA-seq a partir dos arquivos brutos. Essas etapas permitirão avaliar em que medida diferenças de composição celular e processamento bioinformático contribuem para os padrões transcriptômicos observados.
