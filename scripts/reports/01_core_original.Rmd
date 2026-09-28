@@ -1,6 +1,6 @@
 ---
-title: "Relatório da Fase 01: Análise de Expressão Diferencial e Integração Transdiagnóstica"
-author: "Pipeline RNA-Seq Neurodegenerativo"
+title: "Relatório da Fase 01: Expressão Diferencial, Enriquecimento Funcional e Integração Transdiagnóstica"
+author: "Pipeline RNA-seq Neurodegenerativo"
 date: "`r Sys.Date()`"
 output:
   html_document:
@@ -10,6 +10,7 @@ output:
     toc_depth: 3
     code_folding: hide
     self_contained: true
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
@@ -18,40 +19,55 @@ knitr::opts_chunk$set(
   warning = FALSE,
   message = FALSE,
   fig.align = "center",
-  out.width = "90%"
+  out.width = "92%"
 )
 
-library(readr)
-library(dplyr)
-library(knitr)
+suppressPackageStartupMessages({
+  library(readr)
+  library(dplyr)
+  library(knitr)
+})
 
-# Este relatório deve ser renderizado a partir da raiz do repositório
-# com knit_root_dir = getwd().
 project_root <- normalizePath(getwd(), mustWork = TRUE)
 
-results_dir <- file.path(
-  project_root,
-  "results",
-  "01_core_original"
+# ------------------------------------------------------------------
+# Diretórios
+# ------------------------------------------------------------------
+
+metadata_dir <- file.path(project_root, "results", "metadata")
+qc_dir <- file.path(project_root, "results", "qc")
+deseq_dir <- file.path(project_root, "results", "deseq2")
+enrichment_dir <- file.path(project_root, "results", "enrichment")
+integration_dir <- file.path(project_root, "results", "integration")
+plots_dir <- file.path(project_root, "results", "plots")
+audit_dir <- file.path(project_root, "results", "audit")
+harmonization_dir <- file.path(project_root, "results", "harmonization")
+
+datasets <- c("AD", "HD", "PD")
+
+dataset_info <- tibble::tibble(
+  Código = c("AD", "HD", "PD"),
+  GEO = c("GSE53697", "GSE64810", "GSE68719"),
+  Doença = c(
+    "Doença de Alzheimer",
+    "Doença de Huntington",
+    "Doença de Parkinson"
+  ),
+  Região = c(
+    "Córtex pré-frontal dorsolateral",
+    "BA9 / córtex pré-frontal",
+    "BA9 / córtex pré-frontal"
+  )
 )
 
-datasets <- c(
-  "GSE53697",
-  "GSE64810",
-  "GSE68719"
-)
+# ------------------------------------------------------------------
+# Funções auxiliares
+# ------------------------------------------------------------------
 
-disease_labels <- c(
-  GSE53697 = "Alzheimer's disease (AD)",
-  GSE64810 = "Huntington's disease (HD)",
-  GSE68719 = "Parkinson's disease (PD)"
-)
-
-disease_short <- c(
-  GSE53697 = "AD",
-  GSE64810 = "HD",
-  GSE68719 = "PD"
-)
+read_tsv_if_exists <- function(path) {
+  if (!file.exists(path)) return(NULL)
+  readr::read_tsv(path, show_col_types = FALSE, progress = FALSE)
+}
 
 show_figure <- function(path) {
   if (!file.exists(path)) {
@@ -59,576 +75,1130 @@ show_figure <- function(path) {
     return(invisible(NULL))
   }
 
-  abs_path <- normalizePath(path, mustWork = TRUE)
-
   knitr::include_graphics(
-    abs_path,
+    normalizePath(path, mustWork = TRUE),
     rel_path = FALSE
   )
 }
 
-read_if_exists <- function(path) {
-  if (file.exists(path)) {
-    readr::read_csv(path, show_col_types = FALSE)
-  } else {
-    NULL
-  }
-}
-
-deg_path <- function(dataset) {
-  file.path(results_dir, dataset, "deg", "deg_all.csv")
-}
-
 plot_path <- function(dataset, filename) {
-  file.path(results_dir, dataset, "plots", filename)
+  file.path(plots_dir, dataset, filename)
 }
 
-enrichment_path <- function(dataset, filename) {
-  file.path(results_dir, dataset, "enrichment", "plots", filename)
+integration_plot_path <- function(filename) {
+  file.path(plots_dir, "integration", filename)
 }
 
-summarize_deg <- function(x) {
-  if (is.null(x) || nrow(x) == 0) {
-    return(c(
-      Genes_testados = NA_integer_,
-      DEGs_principais = NA_integer_,
-      Upregulated = NA_integer_,
-      Downregulated = NA_integer_,
-      DEGs_criterio_comparativo = NA_integer_
-    ))
-  }
+fmt_int <- function(x) {
+  format(as.integer(x), big.mark = ".", decimal.mark = ",", scientific = FALSE)
+}
 
-  c(
-    Genes_testados = nrow(x),
-    DEGs_principais = sum(x$adj.P.Val < 0.05 & abs(x$logFC) > 0.58, na.rm = TRUE),
-    Upregulated = sum(x$adj.P.Val < 0.05 & x$logFC > 0.58, na.rm = TRUE),
-    Downregulated = sum(x$adj.P.Val < 0.05 & x$logFC < -0.58, na.rm = TRUE),
-    DEGs_criterio_comparativo = sum(x$P.Value < 0.05 & abs(x$logFC) > 1, na.rm = TRUE)
+fmt_num <- function(x, digits = 3) {
+  formatC(as.numeric(x), format = "f", digits = digits, decimal.mark = ",")
+}
+
+# ------------------------------------------------------------------
+# Tabelas de resultados
+# ------------------------------------------------------------------
+
+metadata_all <- read_tsv_if_exists(
+  file.path(metadata_dir, "metadata_all.tsv")
+)
+
+qc_gene <- read_tsv_if_exists(
+  file.path(qc_dir, "qc_gene_filter_summary.tsv")
+)
+
+qc_sample <- read_tsv_if_exists(
+  file.path(qc_dir, "qc_sample_summary.tsv")
+)
+
+deseq_summary <- read_tsv_if_exists(
+  file.path(deseq_dir, "deseq2_summary.tsv")
+)
+
+enrichment_summary <- read_tsv_if_exists(
+  file.path(enrichment_dir, "enrichment_summary.tsv")
+)
+
+integration_summary <- read_tsv_if_exists(
+  file.path(integration_dir, "integration_summary.tsv")
+)
+
+correlation_summary <- read_tsv_if_exists(
+  file.path(integration_dir, "log2FC_spearman_correlations.tsv")
+)
+
+primary_patterns <- read_tsv_if_exists(
+  file.path(integration_dir, "primary_pattern_summary.tsv")
+)
+
+sensitivity_patterns <- read_tsv_if_exists(
+  file.path(integration_dir, "sensitivity_pattern_summary.tsv")
+)
+
+shared_gsea_go <- read_tsv_if_exists(
+  file.path(integration_dir, "shared_GSEA_GO_BP.tsv")
+)
+
+shared_gsea_kegg <- read_tsv_if_exists(
+  file.path(integration_dir, "shared_GSEA_KEGG.tsv")
+)
+
+# ------------------------------------------------------------------
+# Helpers para valores inline
+# ------------------------------------------------------------------
+
+get_de <- function(dataset, metric) {
+  if (is.null(deseq_summary)) return(NA)
+  x <- deseq_summary %>%
+    filter(dataset == !!dataset) %>%
+    pull(all_of(metric))
+  if (length(x) == 0) return(NA)
+  x[[1]]
+}
+
+get_enrichment <- function(dataset, method, database, gene_set, metric = "n_terms_FDR005") {
+  if (is.null(enrichment_summary)) return(NA)
+
+  x <- enrichment_summary %>%
+    filter(
+      dataset == !!dataset,
+      method == !!method,
+      database == !!database,
+      gene_set == !!gene_set
+    ) %>%
+    pull(all_of(metric))
+
+  if (length(x) == 0) return(NA)
+  x[[1]]
+}
+
+get_integration <- function(metric) {
+  if (is.null(integration_summary)) return(NA)
+  x <- integration_summary %>%
+    filter(metric == !!metric) %>%
+    pull(value)
+  if (length(x) == 0) return(NA)
+  x[[1]]
+}
+
+get_rho <- function(pair) {
+  if (is.null(correlation_summary)) return(NA)
+  x <- correlation_summary %>%
+    filter(pair == !!pair) %>%
+    pull(spearman_rho)
+  if (length(x) == 0) return(NA)
+  x[[1]]
+}
+
+# ------------------------------------------------------------------
+# CSS simples
+# ------------------------------------------------------------------
+```
+
+<style>
+body {
+  font-size: 16px;
+  line-height: 1.65;
+}
+h1, h2, h3 {
+  font-weight: 700;
+}
+blockquote {
+  border-left: 4px solid #4d4d4d;
+  padding-left: 14px;
+  color: #444;
+}
+.report-note {
+  background: #f7f7f7;
+  border-left: 4px solid #6c757d;
+  padding: 12px 16px;
+  margin: 18px 0;
+}
+.result-box {
+  background: #f8f9fa;
+  border: 1px solid #e3e6e8;
+  border-radius: 6px;
+  padding: 14px 18px;
+  margin: 18px 0;
+}
+.caption {
+  color: #555;
+}
+</style>
+
+# 1. Introdução
+
+## 1.1 Contexto e objetivo
+
+As doenças de Alzheimer (AD), Huntington (HD) e Parkinson (PD) apresentam etiologias e manifestações clínicas distintas, mas compartilham processos relacionados à perda neuronal, alterações gliais, resposta imune e disfunção de circuitos neurais. A disponibilidade de dados públicos de RNA-seq permite investigar esses componentes de forma comparativa e testar se alterações transcriptômicas observadas em doenças distintas convergem para genes, processos biológicos ou vias moleculares comuns.
+
+A **Fase 01** deste projeto estabelece uma linha de base padronizada para três datasets públicos de bulk RNA-seq:
+
+```{r datasets-overview}
+kable(
+  dataset_info,
+  caption = "Datasets incluídos na Fase 01."
+)
+```
+
+O objetivo foi analisar cada estudo independentemente e, em seguida, realizar uma integração transdiagnóstica em três níveis complementares:
+
+1. **genes diferencialmente expressos**;
+2. **direção e magnitude dos efeitos de expressão**;
+3. **processos biológicos e vias funcionalmente enriquecidas**.
+
+A estratégia foi deliberadamente construída para evitar que a integração dependesse apenas da interseção de listas discretas de DEGs, uma vez que estudos com tamanhos amostrais, variabilidade e poder estatístico diferentes podem compartilhar alterações funcionais mesmo quando não compartilham genes individualmente significativos.
+
+---
+
+# 2. Metodologia
+
+## 2.1 Dados de entrada
+
+Nesta fase foram utilizadas **matrizes de contagens brutas**, sem reprocessamento a partir de FASTQ.
+
+Para AD (GSE53697), foi utilizada a matriz suplementar original `GSE53697_RNAseq_AD.txt.gz`. O arquivo contém colunas de contagens brutas e RPKM; apenas as colunas terminadas em `_raw` foram utilizadas. As colunas RPKM foram excluídas da análise de expressão diferencial.
+
+Para HD (GSE64810) e PD (GSE68719), foram utilizadas as matrizes de contagens brutas geradas/disponibilizadas pelo NCBI GEO para cada série.
+
+As análises foram realizadas separadamente por dataset. Os valores absolutos de expressão não foram concatenados nem comparados diretamente entre estudos.
+
+## 2.2 Auditoria das matrizes
+
+A etapa `00_audit_raw_data.R` verificou:
+
+- dimensões das matrizes;
+- número de amostras;
+- presença de valores ausentes;
+- valores negativos;
+- valores não inteiros;
+- proporção de zeros;
+- genes totalmente zerados;
+- integridade e unicidade dos NCBI GeneIDs;
+- sobreposição do universo gênico entre os estudos;
+- cobertura da anotação GRCh38.p13.
+
+A auditoria mostrou que HD e PD continham apenas contagens inteiras. Em AD foram identificados valores fracionários na coluna de contagens brutas. Como o fluxo padrão do DESeq2 requer contagens inteiras, esses valores foram arredondados para o inteiro mais próximo exclusivamente durante a preparação da matriz, mantendo-se o arquivo bruto original inalterado.
+
+## 2.3 Metadados
+
+Os metadados foram reconstruídos a partir dos arquivos SOFT de cada série e padronizados em uma estrutura comum contendo identificador da amostra, grupo diagnóstico e covariáveis disponíveis.
+
+```{r metadata-summary}
+if (!is.null(metadata_all)) {
+  metadata_table <- metadata_all %>%
+    count(dataset, group, name = "n") %>%
+    arrange(dataset, group)
+
+  kable(
+    metadata_table,
+    caption = "Distribuição das amostras por dataset e grupo diagnóstico."
   )
 }
 ```
 
-# 1. Introdução
-## 1.1 Objetivo
-A Fase 01 estabelece a linha de base do projeto por meio da reanálise das matrizes de expressão disponibilizadas pelos estudos originais para três doenças neurodegenerativas:
+O conjunto final incluiu:
 
-- GSE53697 — doença de Alzheimer (AD);
+- AD: 17 amostras — 8 controles e 9 casos;
+- HD: 69 amostras — 49 controles e 20 casos;
+- PD: 73 amostras — 44 controles e 29 casos.
 
-- GSE64810 — doença de Huntington (HD);
+O modelo principal de expressão diferencial utilizou apenas o grupo diagnóstico (`~ group`). Covariáveis clínicas não foram adicionadas silenciosamente ao modelo principal.
 
-- GSE68719 — doença de Parkinson (PD).
+## 2.4 Preparação das contagens
 
-O objetivo desta etapa é avaliar individualmente os padrões de expressão diferencial de cada doença e, posteriormente, investigar a existência de alterações transcriptômicas compartilhadas entre os três contextos neurodegenerativos.
-A análise compreende controle e exploração da estrutura dos dados, análise de expressão diferencial, enriquecimento funcional por Gene Ontology (GO) e KEGG e integração transdiagnóstica dos resultados.
-Nesta fase são utilizadas as matrizes de expressão processadas disponibilizadas pelos estudos originais. O reprocessamento independente dos dados a partir dos arquivos FASTQ será realizado posteriormente, permitindo avaliar a influência das etapas de quantificação e pré-processamento sobre os resultados.
+O script `02_prepare_counts.R` gerou matrizes contendo apenas:
 
-# 2. Metodologia
-## 2.1 Preparação das matrizes de expressão
-Os três datasets apresentam formatos de expressão distintos, refletindo as estratégias de processamento adotadas nos estudos originais. Nesta primeira fase, foram utilizadas as matrizes de expressão processadas e disponibilizadas pelos respectivos estudos, preservando-se, tanto quanto possível, o universo gênico originalmente fornecido.
-Para o dataset de doença de Alzheimer (GSE53697), foram utilizadas as medidas de RPKM disponibilizadas pelos autores. Genes com expressão igual a zero em todas as amostras foram removidos antes das análises subsequentes. Em seguida, os valores de expressão foram transformados segundo:
+- NCBI GeneID;
+- contagens brutas por amostra.
+
+Nenhum gene foi removido nessa etapa.
+
+Para AD, os valores fracionários foram arredondados para o inteiro mais próximo. Para HD e PD, os valores foram preservados numericamente.
+
+## 2.5 Harmonização gênica
+
+A harmonização foi realizada utilizando **NCBI GeneID como identificador principal**, uma vez que os três conjuntos de contagens utilizam esse identificador e a anotação Ensembl não cobre integralmente o universo de genes presente nas matrizes.
+
+Foram preservados, quando disponíveis:
+
+- NCBI GeneID;
+- símbolo;
+- Ensembl ID;
+- tipo gênico;
+- símbolo original do estudo de AD.
+
+A harmonização identificou 39.620 GeneIDs na união das três matrizes e 18.941 GeneIDs presentes simultaneamente nos três conjuntos brutos. Esses valores representam o universo bruto e não o universo final testável após pré-filtragem.
+
+## 2.6 Controle de qualidade e pré-filtragem
+
+A pré-filtragem foi aplicada **somente ao ramo de expressão diferencial**.
+
+O critério adotado foi:
 
 \[
-\log_2(\mathrm{RPKM} + 1)
+\mathrm{count} \ge 10
 \]
 
-Após a remoção dos genes sem expressão, foram mantidos 18.611 genes para as análises.
+em um número de amostras equivalente ao tamanho do menor grupo experimental de cada dataset:
 
-Para os datasets de doença de Huntington (GSE64810) e doença de Parkinson (GSE68719), foram utilizadas as matrizes de contagens normalizadas por DESeq2 disponibilizadas pelos estudos originais. Como essas matrizes já haviam passado por normalização, não foi aplicada uma nova normalização por TMM, DESeq2 ou outro método. Os valores foram transformados segundo:
+- AD: pelo menos 8 amostras;
+- HD: pelo menos 20 amostras;
+- PD: pelo menos 29 amostras.
+
+A estratégia foi aplicada independentemente a cada estudo.
+
+```{r qc-gene-summary}
+if (!is.null(qc_gene)) {
+  kable(
+    qc_gene,
+    digits = 3,
+    caption = "Resumo da pré-filtragem de genes utilizada na análise de expressão diferencial."
+  )
+}
+```
+
+Após a pré-filtragem, permaneceram:
+
+- **15.811 genes em AD**;
+- **22.093 genes em HD**;
+- **21.322 genes em PD**.
+
+Dos 18.941 GeneIDs originalmente comuns aos três estudos, **15.149 permaneceram após a pré-filtragem em todos os datasets**, correspondendo a aproximadamente 79,98% do universo comum bruto.
+
+## 2.7 PCA
+
+Para avaliação exploratória da estrutura global das amostras, as matrizes pré-filtradas foram transformadas por **variance stabilizing transformation (VST)** do DESeq2.
+
+A VST foi utilizada apenas para visualização e controle de qualidade. A análise de expressão diferencial permaneceu baseada nas contagens inteiras.
+
+Nenhuma amostra foi removida automaticamente com base apenas na posição no PCA.
+
+## 2.8 Expressão diferencial com DESeq2
+
+A expressão diferencial foi analisada separadamente em AD, HD e PD utilizando DESeq2, com modelo:
 
 \[
-\log_2(\mathrm{normalized\ counts} + 1)
+\mathrm{counts} \sim \mathrm{group}
 \]
 
-Foram mantidos 28.087 genes no dataset de Huntington e 17.580 genes no dataset de Parkinson.
-Devido às diferenças no processamento original e nas unidades de expressão entre os datasets, as matrizes foram analisadas separadamente. Dessa forma, não foram realizadas comparações diretas das magnitudes absolutas de expressão entre os três estudos.
-
-## 2.2 Análise de expressão diferencial
-A análise de expressão diferencial foi realizada separadamente para cada dataset utilizando modelos lineares implementados no pacote `limma`.
-Para cada estudo, foi ajustado um modelo contendo o grupo diagnóstico como variável de interesse:
-\[
-\mathrm{expression} \sim \mathrm{group}
-\]
-
-O contraste de interesse foi definido como:
+O grupo controle foi utilizado como referência e o contraste foi definido como:
 
 \[
 \mathrm{Disease} - \mathrm{Control}
 \]
 
-Assim, valores positivos de `logFC` representam maior expressão no grupo da doença em relação ao grupo controle, enquanto valores negativos representam menor expressão no grupo da doença.
-Após o ajuste dos modelos com `lmFit`, foi aplicada moderação Bayesiana utilizando `eBayes(trend = TRUE)`.
-Foram utilizados dois critérios para classificação dos genes diferencialmente expressos.
+Assim:
+
+- `log2FoldChange > 0`: maior expressão na doença;
+- `log2FoldChange < 0`: menor expressão na doença.
+
+O teste principal do DESeq2 avaliou a hipótese nula padrão de `log2FoldChange = 0`. O limiar de efeito não foi incorporado ao teste estatístico, sendo utilizado posteriormente para classificação dos DEGs.
 
 ### Critério principal
-Um gene foi considerado diferencialmente expresso pelo critério principal quando apresentou simultaneamente:
-- FDR (`adj.P.Val`) < 0,05;
-- |logFC| > 0,58.
-O limiar de |logFC| > 0,58 corresponde aproximadamente a uma alteração de 1,5 vez na expressão.
-Este critério foi utilizado como definição principal de significância nas análises de expressão diferencial, enriquecimento funcional e integração entre os datasets.
-
-### Critério comparativo
-Também foi aplicado um segundo critério, utilizado para comparação com abordagens baseadas em significância nominal:
-- `P.Value` < 0,05;
-- |logFC| > 1.
-Esse critério foi mantido separado do critério principal e utilizado como análise comparativa, não substituindo a definição principal baseada em FDR.
-
-## 2.3 Análise de enriquecimento funcional
-As análises de enriquecimento funcional foram realizadas a partir dos genes diferencialmente expressos identificados pelo critério principal.
-Os identificadores gênicos foram convertidos para identificadores Entrez quando necessário, permitindo a utilização das bases de anotação empregadas pelo `clusterProfiler`.
-Foram avaliados:
-
-- Gene Ontology — Biological Process (GO BP);
-
-- Kyoto Encyclopedia of Genes and Genomes (KEGG).
-
-As análises foram realizadas considerando o conjunto total de genes diferencialmente expressos e, adicionalmente, os genes upregulated e downregulated separadamente.
-Para o dataset de Alzheimer (GSE53697), não foram identificados genes diferencialmente expressos pelo critério principal. Consequentemente, não foram realizadas análises de enriquecimento GO ou KEGG para esse dataset.
-
-## 2.4 Integração entre os datasets
-Como os três estudos apresentam universos gênicos distintos, a integração foi realizada somente após a harmonização dos identificadores gênicos
-Os identificadores Ensembl válidos e únicos de cada dataset foram utilizados para determinar o universo gênico comum testável entre Alzheimer, Huntington e Parkinson. A interseção entre os três estudos resultou em 16.100 genes presentes e testados em todos os datasets.
-A integração foi realizada a partir dos resultados das análises de expressão diferencial individuais, sem concatenar as matrizes de expressão dos diferentes estudos.
-
-Para cada gene do universo comum, foram comparados:
-- `logFC`;
-- `P.Value`;
-- `adj.P.Val`;
-- classificação de significância segundo os critérios principal e comparativo;
-- direção da alteração de expressão.
-As sobreposições de genes diferencialmente expressos foram avaliadas entre os três datasets e representadas por diagramas de Venn. A concordância da direção dos efeitos também foi investigada por meio da comparação dos valores de `logFC`.
-Genes que apresentaram o mesmo sinal de `logFC` nos três datasets foram considerados direcionalmente concordantes. Essa classificação representa concordância na direção da alteração de expressão e não implica, necessariamente, significância estatística nos três estudos.
-
-## 2.5 Considerações sobre a estratégia analítica
-Esta etapa corresponde à primeira fase da análise e utiliza dados processados pelos estudos originais. Consequentemente, existem diferenças entre os datasets quanto à forma de quantificação, normalização e universo gênico disponível.
-Por esse motivo, as análises de expressão diferencial foram realizadas independentemente para cada estudo, e a integração foi baseada nos resultados estatísticos e no universo gênico comum, em vez da comparação direta dos valores absolutos de expressão.
-Em uma etapa posterior, os dados brutos de RNA-seq serão reprocessados por um pipeline padronizado, permitindo avaliar o impacto das diferenças de processamento sobre os resultados obtidos nesta primeira fase.
-
-# 3. Visão geral dos datasets
-```{r dataset-summary}
-dataset_summary <- data.frame(
-  Dataset = datasets,
-  Doença = unname(disease_labels[datasets]),
-  Código = unname(disease_short[datasets])
-)
-
-kable(
-  dataset_summary,
-  caption = "Datasets analisados na Fase 01."
-)
-
-```
-
-# 4. Resultados por doença
-
-## 4.1 Alzheimer — GSE53697
-
-## 4.1.1 Expressão diferencial
-
-```{r ad-deg-summary}
-ad <- read_if_exists(deg_path("GSE53697"))
-
-if (!is.null(ad)) {
-  stats <- summarize_deg(ad)
-
-  summary_table <- data.frame(
-    Métrica = c(
-      "Genes testados",
-      "DEGs — critério principal",
-      "Upregulated — principal",
-      "Downregulated — principal",
-      "DEGs — critério comparativo"
-    ),
-    Valor = unname(stats)
-  )
-
-  kable(summary_table, caption = "Resumo da expressão diferencial — GSE53697 (AD).")
-}
-```
-
-No dataset de Alzheimer, nenhum gene atingiu simultaneamente os critérios de FDR < 0,05 e |logFC| > 0,58. Portanto, não foi identificada uma assinatura de expressão diferencial estatisticamente significativa segundo o critério principal.
-Esse resultado é mantido como parte da análise e não foram relaxados os limiares estatísticos para produzir artificialmente uma lista de DEGs.
-
-## 4.1.2 PCA
-
-```{r ad-pca, fig.cap="Análise de componentes principais (PCA) — GSE53697 (AD)."}
-show_figure(
-  plot_path(
-    "GSE53697",
-    "pca.png"
-  )
-)
-
-```
-
-## 4.1.3 Volcano plots
-### Critério principal
-
-```{r ad-volcano-primary, fig.cap="Volcano plot segundo o critério principal — GSE53697 (AD)."}
-show_figure(
-  plot_path(
-    "GSE53697",
-    "volcano_primary.png"
-  )
-)
-
-```
-
-### Critério comparativo
-```{r ad-volcano-article, fig.cap="Volcano plot segundo o critério comparativo (p < 0,05 e |logFC| > 1) — GSE53697 (AD)."}
-show_figure(
-  plot_path(
-    "GSE53697",
-    "volcano_article.png"
-  )
-)
-
-```
-
-## 4.1.4 Heatmap
-Não foi produzido heatmap baseado nos DEGs principais para o dataset GSE53697, pois nenhum gene atingiu o critério principal de significância.
-A ausência dessa figura é, portanto, consequência direta do resultado da análise diferencial e não representa falha no pipeline.
-
-## 4.1.5 Enriquecimento funcional
-Como nenhum gene foi classificado como diferencialmente expresso segundo o critério principal, não foi realizada interpretação de enriquecimento GO BP ou KEGG para Alzheimer.
-A realização de enriquecimento sem uma lista de DEGs que satisfaça o critério previamente estabelecido exigiria a alteração posterior dos limiares estatísticos e, por isso, não foi adotada.
-
-## 4.2 Huntington — GSE64810
-
-## 4.2.1 Expressão diferencial
-
-```{r hd-deg-summary}
-hd <- read_if_exists(deg_path("GSE64810"))
-if (!is.null(hd)) {
-  stats <- summarize_deg(hd)
-  summary_table <- data.frame(
-    Métrica = c(
-      "Genes testados",
-      "DEGs — critério principal",
-      "Upregulated — principal",
-      "Downregulated — principal",
-      "DEGs — critério comparativo"
-    ),
-    Valor = unname(stats)
-  )
-  kable(summary_table, caption = "Resumo da expressão diferencial — GSE64810 (HD).")
-}
-```
-
-## 4.2.2 PCA
-```{r hd-pca, fig.cap="Análise de componentes principais (PCA) — GSE64810 (HD)."}
-show_figure(
-  plot_path(
-    "GSE64810",
-    "pca.png"
-  )
-)
-
-```
-
-## 4.2.3 Volcano plots
-### Critério principal
-```{r hd-volcano-primary, fig.cap="Volcano plot segundo o critério principal — GSE64810 (HD)."}
-show_figure(
-  plot_path(
-    "GSE64810",
-    "volcano_primary.png"
-  )
-)
-
-```
-
-### Critério comparativo
-```{r hd-volcano-article, fig.cap="Volcano plot segundo o critério comparativo (p < 0,05 e |logFC| > 1) — GSE64810 (HD)."}
-show_figure(
-  plot_path(
-    "GSE64810",
-    "volcano_article.png"
-  )
-)
-
-```
-
-## 4.2.4 Heatmap
-```{r hd-heatmap, fig.cap="Heatmap dos principais genes diferencialmente expressos — GSE64810 (HD)."}
-show_figure(
-  plot_path(
-    "GSE64810",
-    "heatmap_top50_primary.png"
-  )
-)
-
-```
-
-## 4.2.5 Enriquecimento GO BP
-```{r hd-go, fig.cap="Enriquecimento funcional Gene Ontology Biological Process — GSE64810 (HD)."}
-show_figure(
-  enrichment_path(
-    "GSE64810",
-    "go_bp_all.png"
-  )
-)
-
-```
-
-## 4.2.6 Enriquecimento KEGG
-```{r hd-kegg, fig.cap="Enriquecimento de vias KEGG — GSE64810 (HD)."}
-show_figure(
-  enrichment_path(
-    "GSE64810",
-    "kegg_all.png"
-  )
-)
-
-```
-
-## 4.3 Parkinson — GSE68719
-## 4.3.1 Expressão diferencial
-```{r pd-deg-summary}
-pd <- read_if_exists(deg_path("GSE68719"))
-
-if (!is.null(pd)) {
-  stats <- summarize_deg(pd)
-
-  summary_table <- data.frame(
-    Métrica = c(
-      "Genes testados",
-      "DEGs — critério principal",
-      "Upregulated — principal",
-      "Downregulated — principal",
-      "DEGs — critério comparativo"
-    ),
-    Valor = unname(stats)
-  )
-
-  kable(summary_table, caption = "Resumo da expressão diferencial — GSE68719 (PD).")
-}
-```
-
-## 4.3.2 PCA
-```{r pd-pca, fig.cap="Análise de componentes principais (PCA) — GSE68719 (PD)."}
-show_figure(
-  plot_path(
-    "GSE68719",
-    "pca.png"
-  )
-)
-
-```
-
-## 4.3.3 Volcano plots
-### Critério principal
-
-```{r pd-volcano-primary, fig.cap="Volcano plot segundo o critério principal — GSE68719 (PD)."}
-show_figure(
-  plot_path(
-    "GSE68719",
-    "volcano_primary.png"
-  )
-)
-
-```
-### Critério comparativo
-```{r pd-volcano-article, fig.cap="Volcano plot segundo o critério comparativo (p < 0,05 e |logFC| > 1) — GSE68719 (PD)."}
-show_figure(
-  plot_path(
-    "GSE68719",
-    "volcano_article.png"
-  )
-)
-
-```
-
-## 4.3.4 Heatmap
-```{r pd-heatmap, fig.cap="Heatmap dos principais genes diferencialmente expressos — GSE68719 (PD)."}
-show_figure(
-  plot_path(
-    "GSE68719",
-    "heatmap_top50_primary.png"
-  )
-
-)
-
-```
-
-## 4.3.5 Enriquecimento GO BP
-```{r pd-go, fig.cap="Enriquecimento funcional Gene Ontology Biological Process — GSE68719 (PD)."}
-show_figure(
-  enrichment_path(
-    "GSE68719",
-    "go_bp_all.png"
-  )
-
-)
-
-```
-
-## 4.3.6 Enriquecimento KEGG
-```{r pd-kegg, fig.cap="Enriquecimento de vias KEGG — GSE68719 (PD)."}
-show_figure(
-  enrichment_path(
-    "GSE68719",
-    "kegg_all.png"
-  )
-)
-```
-
-# 5. Comparação entre as doenças
-## 5.1 Expressão diferencial
-```{r comparison-deg}
-ad_stats <- summarize_deg(ad)
-hd_stats <- summarize_deg(hd)
-pd_stats <- summarize_deg(pd)
-
-deg_comparison <- data.frame(
-  Doença = c("AD", "HD", "PD"),
-  Genes_testados = c(ad_stats["Genes_testados"], hd_stats["Genes_testados"], pd_stats["Genes_testados"]),
-  DEGs_principais = c(ad_stats["DEGs_principais"], hd_stats["DEGs_principais"], pd_stats["DEGs_principais"]),
-  Upregulated = c(ad_stats["Upregulated"], hd_stats["Upregulated"], pd_stats["Upregulated"]),
-  Downregulated = c(ad_stats["Downregulated"], hd_stats["Downregulated"], pd_stats["Downregulated"]),
-  DEGs_criterio_comparativo = c(
-    ad_stats["DEGs_criterio_comparativo"],
-    hd_stats["DEGs_criterio_comparativo"],
-    pd_stats["DEGs_criterio_comparativo"]
-  )
-)
-
-kable(
-  deg_comparison,
-  caption = "Comparação dos resultados de expressão diferencial."
-)
-```
-
-Os três datasets apresentaram comportamentos distintos. Alzheimer não apresentou genes significativos segundo o critério principal, enquanto Huntington e Parkinson apresentaram conjuntos substanciais de genes diferencialmente expressos.
-Essas diferenças devem ser interpretadas considerando as características particulares de cada estudo, incluindo tamanho amostral, processamento original, universo gênico e variabilidade biológica e técnica.
-
-# 6. Integração transdiagnóstica
-## 6.1 Universo comum testável
-
-```{r intersection-summary}
-intersection_dir <- file.path(
-  results_dir,
-  "intersection"
-)
-
-intersection_summary <- read_if_exists(
-  file.path(
-    intersection_dir,
-    "intersection_summary.csv"
-  )
-
-)
-
-common_universe <- read_if_exists(
-  file.path(
-    intersection_dir,
-    "common_testable_universe.csv"
-  )
-
-)
-
-if (!is.null(common_universe)) {
-  cat(
-    "Número de genes no universo comum testável:",
-    format(
-      nrow(common_universe),
-      big.mark = ".",
-      decimal.mark = ","
+
+\[
+\mathrm{padj}<0,05
+\]
+
+e
+
+\[
+|\log_2FC|>0,58
+\]
+
+O limiar `|log2FC| > 0,58` corresponde aproximadamente a uma diferença de 1,5 vez na expressão.
+
+### Análise de sensibilidade
+
+\[
+\mathrm{padj}<0,05
+\]
+
+e
+
+\[
+|\log_2FC|>1
+\]
+
+Essa análise utiliza um limiar de efeito mais restritivo, correspondente a aproximadamente duas vezes de diferença, mantendo a correção por múltiplos testes.
+
+## 2.9 Enriquecimento funcional
+
+Foram utilizadas duas estratégias complementares.
+
+### ORA — Over-Representation Analysis
+
+A ORA foi aplicada aos DEGs do critério principal, separando:
+
+- todos os DEGs (`All`);
+- genes aumentados (`Up`);
+- genes reduzidos (`Down`).
+
+Foram analisados:
+
+- GO Biological Process;
+- KEGG.
+
+O universo da ORA foi composto pelos genes efetivamente testados pelo DESeq2 em cada dataset.
+
+Como AD não apresentou DEGs pelo critério principal, sua ORA foi corretamente omitida.
+
+### GSEA
+
+O GSEA utilizou todos os genes com estatística de Wald válida, ranqueados pela variável `stat` produzida pelo DESeq2.
+
+Foram analisados:
+
+- GO Biological Process;
+- KEGG.
+
+No contraste doença-controle:
+
+- `NES > 0` indica enriquecimento na extremidade positiva do ranking;
+- `NES < 0` indica enriquecimento na extremidade negativa do ranking.
+
+O NES não deve ser interpretado automaticamente como ativação ou inibição fisiológica de uma via.
+
+## 2.10 Integração transdiagnóstica
+
+A integração foi restrita ao **universo comum testável**, definido como genes com efeito e teste estatístico válidos nos três datasets.
+
+Foram comparados:
+
+- classificação de DEG;
+- `log2FoldChange`;
+- direção do efeito;
+- correlação dos efeitos;
+- termos GSEA compartilhados;
+- ORA compartilhada entre HD e PD.
+
+A integração funcional foi considerada particularmente importante para AD, uma vez que a ausência de DEGs individuais não impede a existência de alterações coordenadas em conjuntos gênicos.
+
+---
+
+# 3. Visão geral dos resultados
+
+## 3.1 Resumo da expressão diferencial
+
+```{r deseq-overview}
+if (!is.null(deseq_summary)) {
+
+  deseq_table <- deseq_summary %>%
+    select(
+      dataset,
+      n_samples,
+      n_genes_input,
+      n_FDR_005,
+      n_DEG_primary,
+      n_up_primary,
+      n_down_primary,
+      n_DEG_sensitivity,
+      n_up_sensitivity,
+      n_down_sensitivity
+    ) %>%
+    rename(
+      Dataset = dataset,
+      Amostras = n_samples,
+      `Genes testados` = n_genes_input,
+      `FDR < 0,05` = n_FDR_005,
+      `DEGs principais` = n_DEG_primary,
+      `Up — principal` = n_up_primary,
+      `Down — principal` = n_down_primary,
+      `DEGs sensibilidade` = n_DEG_sensitivity,
+      `Up — sensibilidade` = n_up_sensitivity,
+      `Down — sensibilidade` = n_down_sensitivity
     )
+
+  kable(
+    deseq_table,
+    caption = "Resumo da análise de expressão diferencial com DESeq2."
   )
 }
-
 ```
 
-A integração foi restrita aos genes testáveis nos três datasets. Essa estratégia evita classificar como não significativo em uma doença um gene que, na realidade, não fazia parte do universo analisado naquele dataset.
-O universo comum foi composto por **16.100 genes**.
-Dentro desse universo, foram identificados:
+Os três datasets apresentaram comportamentos distintos. AD não apresentou genes que satisfizessem simultaneamente FDR < 0,05 e `|log2FC| > 0,58`, enquanto HD e PD apresentaram assinaturas diferenciais robustas.
 
-- 0 DEGs principais em AD;
+PD apresentou o maior número de DEGs pelo critério principal, enquanto HD manteve maior número de DEGs quando aplicado o limiar mais restritivo de `|log2FC| > 1`.
 
-- 1.265 DEGs principais em HD;
+---
 
-- 2.102 DEGs principais em PD.
+# 4. Resultados — Alzheimer
 
-## 6.2 Interseção — critério principal
-```{r venn-primary, fig.cap="Interseção dos genes diferencialmente expressos entre AD, HD e PD segundo o critério principal."}
+## 4.1 PCA
+
+```{r ad-pca, fig.cap="PCA das amostras do dataset de Alzheimer após VST."}
 show_figure(
-  file.path(
-    intersection_dir,
-    "plots",
-    "venn_primary_AD_HD_PD.png"
-  )
+  plot_path("AD", "PCA.png")
 )
-
 ```
 
-Segundo o critério principal, não foram identificados genes diferencialmente expressos simultaneamente nas três doenças devido à ausência de DEGs significativos em Alzheimer.
-Entretanto, **553 genes foram compartilhados entre Huntington e Parkinson** dentro do universo comum testável.
-Além disso:
+Os dois primeiros componentes principais explicaram **63% da variabilidade observada** (`PC1 = 35%`; `PC2 = 28%`).
 
-- 712 genes foram específicos de HD;
+Observou-se ampla sobreposição entre casos e controles, sem separação global clara entre os grupos. Algumas amostras ocuparam regiões periféricas do espaço definido pelos dois primeiros componentes, porém nenhuma foi excluída com base apenas no PCA.
 
-- 1.549 genes foram específicos de PD;
+A elevada proporção de variância explicada por PC1 e PC2 não implica que 63% da variabilidade seja causada pelo diagnóstico. O PCA mostra a estrutura global da expressão, e a forte sobreposição entre casos e controles indica que outras fontes de variação também contribuem substancialmente para o dataset.
 
-- 553 genes foram compartilhados entre HD e PD.
+## 4.2 Expressão diferencial
 
-Todos os 553 genes compartilhados entre HD e PD apresentaram alteração na mesma direção nas duas doenças.
+AD apresentou **`r fmt_int(get_de("AD", "n_DEG_primary"))` DEGs** pelo critério principal.
 
-## 6.3 Interseção — critério comparativo
-```{r venn-article, fig.cap="Interseção dos genes segundo o critério comparativo (p < 0,05 e |logFC| > 1)."}
+```{r ad-ma, fig.cap="MA plot da análise de expressão diferencial em Alzheimer."}
 show_figure(
-  file.path(
-    intersection_dir,
-    "plots",
-    "venn_article_AD_HD_PD.png"
-  )
+  plot_path("AD", "MA_plot.png")
 )
-
 ```
 
-O critério comparativo produz um padrão de interseção diferente do observado com o critério principal.
-Nesse cenário foram observados:
+O MA plot mostra genes com diferentes magnitudes de `log2FoldChange`, porém nenhum ponto foi classificado como DEG pelo critério principal após correção por múltiplos testes.
 
-- 162 genes compartilhados entre HD e PD;
-
-- 1 gene compartilhado entre AD e PD;
-
-- 1 gene compartilhado entre AD, HD e PD.
-
-Esses resultados são apresentados como análise comparativa e não substituem a definição principal de DEG utilizada no estudo.
-
-# 7. Concordância dos efeitos entre HD e PD
-Como Huntington e Parkinson apresentaram a principal interseção observada pelo critério primário, a relação entre os efeitos de expressão foi examinada diretamente por meio dos valores de logFC.
-
-```{r hd-pd-scatter, fig.cap="Relação entre os efeitos de expressão (logFC) observados em Huntington e Parkinson no universo comum testável."}
+```{r ad-volcano, fig.cap="Volcano plot da análise de expressão diferencial em Alzheimer."}
 show_figure(
-  file.path(
-    intersection_dir,
-    "plots",
-    "logFC_HD_vs_PD.png"
-  )
-
+  plot_path("AD", "volcano_plot.png")
 )
-
 ```
 
-Os genes compartilhados entre HD e PD pelo critério principal apresentaram concordância completa de direção: os 553 genes compartilhados apresentaram efeitos no mesmo sentido nas duas doenças, enquanto nenhum apresentou direção oposta.
-Separadamente, considerando apenas a direção do efeito e independentemente da significância estatística, **5.204 genes apresentaram o mesmo sinal de logFC nos três datasets**. Esse número não deve ser interpretado como 5.204 DEGs transdiagnósticos, pois não incorpora o critério de significância estatística.
+O volcano plot evidencia que o principal limitante em AD não foi a completa ausência de efeitos de expressão, mas a ausência de genes capazes de atingir FDR < 0,05 após correção por múltiplos testes.
 
-# 8. Enriquecimento funcional
-As análises de enriquecimento mostraram que os conjuntos de genes diferencialmente expressos em Huntington e Parkinson estão associados a múltiplos processos biológicos e vias moleculares.
-A interpretação dessas análises deve considerar que o número de genes mapeados para os identificadores utilizados pelas bases funcionais varia entre datasets. Essa diferença é particularmente relevante para Huntington, cujo universo original inclui uma proporção maior de genes sem correspondência direta nos identificadores utilizados nas análises de enriquecimento.
-Para Alzheimer, não foi realizada interpretação de enriquecimento pelo critério principal devido à ausência de DEGs significativos.
-Os resultados de GO BP e KEGG apresentados nas seções individuais devem ser interpretados como caracterização funcional dos conjuntos de DEGs de HD e PD, e não como evidência direta de vias compartilhadas entre as três doenças.
+Esse resultado foi mantido como parte da análise, sem relaxamento posterior do limiar de FDR para produzir artificialmente uma lista de DEGs.
 
-# 9. Limitações
-A Fase 01 utiliza matrizes de expressão processadas disponibilizadas pelos estudos originais. Consequentemente, diferenças introduzidas durante alinhamento, quantificação, filtragem ou normalização original não podem ser completamente controladas nesta etapa.
-Além disso, as escalas absolutas de expressão não são diretamente comparáveis entre os três datasets, uma vez que Alzheimer foi analisado a partir de RPKM, enquanto Huntington e Parkinson utilizam contagens normalizadas por DESeq2.
-Os datasets também apresentam diferenças em tamanho amostral, composição clínica, disponibilidade de covariáveis e universo gênico. Particularmente, o dataset de Parkinson está restrito a genes codificadores de proteínas, justificando o uso de um universo comum testável na análise de interseção.
-A ausência de DEGs significativos em Alzheimer pelo critério principal limita a identificação de uma assinatura estatisticamente significativa compartilhada simultaneamente entre AD, HD e PD nesta fase.
-Por fim, concordância na direção do efeito não é equivalente a significância estatística compartilhada. Assim, os 5.204 genes com direção concordante nos três datasets não são classificados como DEGs transdiagnósticos.
+## 4.3 Heatmap
 
-# 10. Conclusão da Fase 01
-A análise individual identificou comportamentos transcriptômicos distintos entre os três datasets. Huntington e Parkinson apresentaram conjuntos substanciais de genes diferencialmente expressos segundo o critério principal, enquanto Alzheimer não apresentou genes que satisfizessem simultaneamente os limiares estabelecidos de FDR e magnitude de efeito.
-A integração utilizando um universo comum de 16.100 genes identificou **553 DEGs compartilhados entre Huntington e Parkinson**, todos apresentando concordância na direção do efeito.
-Não foram identificados DEGs compartilhados simultaneamente entre AD, HD e PD segundo o critério principal. Dessa forma, os resultados atuais não sustentam, nesta fase, uma assinatura de expressão diferencial estatisticamente significativa comum às três doenças sob os critérios adotados.
-Os resultados estabelecem uma linha de base para as etapas seguintes do projeto, incluindo a deconvolução da composição celular e, posteriormente, o reprocessamento padronizado dos dados de RNA-seq a partir dos arquivos brutos. Essas etapas permitirão avaliar em que medida diferenças de composição celular e processamento bioinformático contribuem para os padrões transcriptômicos observados.
+Não foi produzido heatmap baseado nos DEGs principais para AD, pois nenhum gene atingiu o critério principal de significância. A ausência da figura é, portanto, consequência direta do resultado estatístico e não uma falha do pipeline.
+
+## 4.4 Nota sobre a auditoria específica de AD
+
+A discrepância entre a ausência de DEGs por FDR e resultados previamente descritos para GSE53697 motivou uma auditoria adicional.
+
+A matriz bruta original foi comparada com a matriz preparada, confirmando identidade dos GeneIDs e das 17 colunas de contagens brutas. As colunas RPKM foram excluídas corretamente, e o arredondamento aplicado antes do DESeq2 alterou apenas os valores fracionários, com diferença máxima individual de 0,5.
+
+Também foi realizada uma análise exploratória utilizando significância nominal. O dataset apresentou genes com `p < 0,05` e efeitos de expressão relevantes, mas esses sinais não permaneceram significativos após correção para múltiplos testes.
+
+Assim, o resultado de zero DEGs deve ser interpretado como **ausência de genes individualmente robustos sob os critérios estatísticos adotados neste pipeline**, e não como ausência de qualquer estrutura biológica no dataset.
+
+## 4.5 GSEA — GO Biological Process
+
+AD apresentou **`r fmt_int(get_enrichment("AD", "GSEA", "GO_BP", "Ranked"))` termos GO BP significativos** por GSEA.
+
+```{r ad-gsea-go, fig.cap="GSEA de Gene Ontology Biological Process no dataset de Alzheimer."}
+show_figure(
+  plot_path("AD", "enrichment_GSEA_GO_BP.png")
+)
+```
+
+Entre os termos positivos destacaram-se processos relacionados a:
+
+- ativação do sistema complemento;
+- resposta imune humoral;
+- processamento e apresentação de antígenos;
+- apresentação via MHC classe II;
+- resposta celular e detoxificação relacionadas a cobre e outros metais.
+
+Entre os termos negativos destacou-se a regulação do potencial de membrana pós-sináptica.
+
+O resultado mostra que **ausência de DEGs individuais não equivale à ausência de alteração funcional coordenada**. O GSEA identifica deslocamentos consistentes de conjuntos de genes ao longo do ranking completo, mesmo quando cada gene isoladamente não alcança FDR < 0,05.
+
+## 4.6 GSEA — KEGG
+
+AD apresentou **`r fmt_int(get_enrichment("AD", "GSEA", "KEGG", "Ranked"))` vias KEGG significativas**.
+
+```{r ad-gsea-kegg, fig.cap="GSEA de vias KEGG no dataset de Alzheimer."}
+show_figure(
+  plot_path("AD", "enrichment_GSEA_KEGG.png")
+)
+```
+
+Foram observados enriquecimentos positivos para vias relacionadas a:
+
+- complemento e coagulação;
+- processamento e apresentação de antígenos;
+- metabolismo de ácidos graxos;
+- módulos imunes compartilhados com diferentes categorias infecciosas, autoimunes e inflamatórias.
+
+Categorias KEGG nomeadas por doenças infecciosas ou autoimunes não foram interpretadas literalmente como presença dessas condições nas amostras. Essas vias compartilham genes de complemento, MHC, citocinas e outros componentes de resposta imune.
+
+### Síntese — AD
+
+<div class="result-box">
+
+**AD apresentou sinal fraco no nível de genes individuais, mas forte organização funcional.**  
+O padrão predominante foi enriquecimento positivo de processos imunes, complemento e apresentação antigênica, acompanhado por enriquecimento negativo de processos relacionados à função pós-sináptica.
+
+</div>
+
+---
+
+# 5. Resultados — Huntington
+
+## 5.1 PCA
+
+```{r hd-pca, fig.cap="PCA das amostras do dataset de Huntington após VST."}
+show_figure(
+  plot_path("HD", "PCA.png")
+)
+```
+
+Os dois primeiros componentes explicaram **49% da variância total** (`PC1 = 26%`; `PC2 = 23%`).
+
+Observou-se separação parcial entre HD e controles, sobretudo ao longo de PC1, embora ainda exista sobreposição entre os grupos. Os controles também apresentaram dispersão considerável, compatível com heterogeneidade biológica e técnica de amostras humanas de tecido cerebral pós-morte.
+
+## 5.2 Expressão diferencial
+
+Foram identificados:
+
+- **`r fmt_int(get_de("HD", "n_DEG_primary"))` DEGs** pelo critério principal;
+- **`r fmt_int(get_de("HD", "n_up_primary"))` genes aumentados**;
+- **`r fmt_int(get_de("HD", "n_down_primary"))` genes reduzidos**.
+
+Na análise de sensibilidade, permaneceram **`r fmt_int(get_de("HD", "n_DEG_sensitivity"))` DEGs**.
+
+```{r hd-ma, fig.cap="MA plot da análise de expressão diferencial em Huntington."}
+show_figure(
+  plot_path("HD", "MA_plot.png")
+)
+```
+
+O MA plot mostrou ampla distribuição de alterações nas duas direções, com discreta predominância de genes aumentados e presença de alguns efeitos positivos de grande magnitude.
+
+```{r hd-volcano, fig.cap="Volcano plot da análise de expressão diferencial em Huntington."}
+show_figure(
+  plot_path("HD", "volcano_plot.png")
+)
+```
+
+Entre os sinais de maior destaque visual apareceram genes como `SIX1`, `SLC6A20`, `CRABP1`, `OMD`, `VNN2`, `SPTLC3`, `DSP`, `OGN`, `SLC26A7` e `SLC16A12`.
+
+Esses genes representam candidatos de alta significância e/ou magnitude de efeito, mas a interpretação mecanística deve considerar o conjunto funcional e não apenas genes isolados.
+
+## 5.3 Heatmap dos 50 principais DEGs
+
+```{r hd-heatmap, fig.cap="Heatmap dos 50 principais DEGs do dataset de Huntington."}
+show_figure(
+  plot_path("HD", "heatmap_top50_DEGs.png")
+)
+```
+
+O heatmap mostrou uma assinatura transcriptômica coerente, com tendência de separação entre HD e controles, embora não perfeita. Vários genes apresentaram menor expressão relativa nos controles e maior expressão nas amostras HD.
+
+O agrupamento hierárquico reforça a presença de uma assinatura associada à doença, mas também evidencia heterogeneidade entre indivíduos.
+
+## 5.4 ORA — GO Biological Process
+
+```{r hd-ora-go, fig.cap="ORA de Gene Ontology Biological Process no dataset de Huntington."}
+show_figure(
+  plot_path("HD", "enrichment_ORA_GO_BP.png")
+)
+```
+
+Os genes aumentados foram enriquecidos principalmente para:
+
+- resposta imune;
+- resposta humoral;
+- produção de citocinas;
+- resposta a estímulos bacterianos;
+- cicatrização;
+- angiogênese.
+
+Em contraste, os genes reduzidos foram enriquecidos para:
+
+- mielinização do sistema nervoso central;
+- sinalização por neuropeptídeos;
+- transporte transmembrana de íons;
+- orientação de projeções neuronais;
+- orientação axonal.
+
+Esse padrão estabelece um contraste entre **programas imunes/remodelamento aumentados** e **programas neuronais/mielínicos reduzidos**.
+
+## 5.5 ORA — KEGG
+
+```{r hd-ora-kegg, fig.cap="ORA de vias KEGG no dataset de Huntington."}
+show_figure(
+  plot_path("HD", "enrichment_ORA_KEGG.png")
+)
+```
+
+As vias enriquecidas entre genes aumentados incluíram:
+
+- interação citocina–receptor de citocina;
+- complemento e coagulação;
+- linhagem hematopoiética;
+- fagocitose;
+- categorias inflamatórias/imunes.
+
+Nos genes reduzidos destacaram-se:
+
+- interação ligante–receptor neuroativo;
+- proteínas motoras;
+- biogênese ribossomal.
+
+## 5.6 GSEA — GO Biological Process
+
+```{r hd-gsea-go, fig.cap="GSEA de Gene Ontology Biological Process no dataset de Huntington."}
+show_figure(
+  plot_path("HD", "enrichment_GSEA_GO_BP.png")
+)
+```
+
+O GSEA confirmou enriquecimento positivo de processos relacionados à:
+
+- ativação e regulação de células T;
+- ativação de leucócitos;
+- produção de citocinas;
+- resposta de defesa;
+- adesão celular;
+- angiogênese.
+
+A concordância entre GSEA e ORA fortalece a interpretação do eixo imunológico observado em HD.
+
+## 5.7 GSEA — KEGG
+
+```{r hd-gsea-kegg, fig.cap="GSEA de vias KEGG no dataset de Huntington."}
+show_figure(
+  plot_path("HD", "enrichment_GSEA_KEGG.png")
+)
+```
+
+As vias positivas incluíram:
+
+- interação citocina–receptor;
+- TGF-β;
+- PI3K-Akt;
+- categorias inflamatórias e infecciosas que compartilham módulos imunes.
+
+Essas categorias foram interpretadas pelo conteúdo gênico compartilhado, e não pelo nome literal da doença presente no banco KEGG.
+
+### Síntese — HD
+
+<div class="result-box">
+
+**HD apresentou uma assinatura diferencial robusta e bidirecional.**  
+Os resultados convergiram para enriquecimento positivo de processos imunes/inflamatórios e remodelamento, acompanhado por redução de processos relacionados à mielinização, orientação axonal e comunicação neuronal.
+
+</div>
+
+---
+
+# 6. Resultados — Parkinson
+
+## 6.1 PCA
+
+```{r pd-pca, fig.cap="PCA das amostras do dataset de Parkinson após VST."}
+show_figure(
+  plot_path("PD", "PCA.png")
+)
+```
+
+Os dois primeiros componentes explicaram **55% da variância total** (`PC1 = 38%`; `PC2 = 17%`).
+
+Observou-se separação parcial entre casos e controles principalmente ao longo de PC1, embora com considerável sobreposição. Assim como em HD, a doença representa uma fonte relevante, mas não exclusiva, de variação transcriptômica.
+
+## 6.2 Expressão diferencial
+
+Foram identificados:
+
+- **`r fmt_int(get_de("PD", "n_DEG_primary"))` DEGs** pelo critério principal;
+- **`r fmt_int(get_de("PD", "n_up_primary"))` genes aumentados**;
+- **`r fmt_int(get_de("PD", "n_down_primary"))` genes reduzidos**.
+
+Na análise de sensibilidade, permaneceram **`r fmt_int(get_de("PD", "n_DEG_sensitivity"))` DEGs**.
+
+```{r pd-ma, fig.cap="MA plot da análise de expressão diferencial em Parkinson."}
+show_figure(
+  plot_path("PD", "MA_plot.png")
+)
+```
+
+O MA plot evidenciou numerosos genes significativos em ambas as direções ao longo de ampla faixa de expressão média.
+
+```{r pd-volcano, fig.cap="Volcano plot da análise de expressão diferencial em Parkinson."}
+show_figure(
+  plot_path("PD", "volcano_plot.png")
+)
+```
+
+Entre os genes de maior destaque visual apareceram `SERPINH1`, `HSPA1A`, `DNAJB1`, `GOS2`, `SLC6A12`, `HSPA1L`, `HSPA1B`, `HSPB1`, `RIPOR3` e `HSPA6`.
+
+## 6.3 Heatmap dos 50 principais DEGs
+
+```{r pd-heatmap, fig.cap="Heatmap dos 50 principais DEGs do dataset de Parkinson."}
+show_figure(
+  plot_path("PD", "heatmap_top50_DEGs.png")
+)
+```
+
+O heatmap mostrou uma assinatura transcriptômica coerente, com tendência de separação entre casos e controles e expressão coordenada de diversos genes associados à resposta celular e ao estresse.
+
+## 6.4 ORA — GO Biological Process
+
+```{r pd-ora-go, fig.cap="ORA de Gene Ontology Biological Process no dataset de Parkinson."}
+show_figure(
+  plot_path("PD", "enrichment_ORA_GO_BP.png")
+)
+```
+
+Os genes aumentados apresentaram forte enriquecimento para:
+
+- resposta imune adaptativa;
+- ativação de leucócitos;
+- imunidade mediada por leucócitos;
+- resposta a moléculas de origem bacteriana;
+- processos efetores imunes.
+
+Os genes reduzidos foram enriquecidos para:
+
+- regulação da sinalização trans-sináptica;
+- modulação da transmissão sináptica química;
+- potencial de membrana;
+- transporte iônico;
+- sinalização por neuropeptídeos.
+
+## 6.5 ORA — KEGG
+
+```{r pd-ora-kegg, fig.cap="ORA de vias KEGG no dataset de Parkinson."}
+show_figure(
+  plot_path("PD", "enrichment_ORA_KEGG.png")
+)
+```
+
+Os genes aumentados apresentaram enriquecimento para:
+
+- interação citocina–receptor;
+- complemento e coagulação;
+- linhagem hematopoiética;
+- categorias imunes/inflamatórias.
+
+Nos genes reduzidos foram observadas:
+
+- interação ligante–receptor neuroativo;
+- sinapse glutamatérgica;
+- sinapse serotoninérgica;
+- sinalização por cálcio;
+- sinalização por cAMP.
+
+## 6.6 GSEA — GO Biological Process
+
+```{r pd-gsea-go, fig.cap="GSEA de Gene Ontology Biological Process no dataset de Parkinson."}
+show_figure(
+  plot_path("PD", "enrichment_GSEA_GO_BP.png")
+)
+```
+
+O GSEA confirmou forte enriquecimento positivo de resposta imune, citocinas, resposta a lipopolissacarídeo, células T e ativação de leucócitos.
+
+## 6.7 GSEA — KEGG
+
+```{r pd-gsea-kegg, fig.cap="GSEA de vias KEGG no dataset de Parkinson."}
+show_figure(
+  plot_path("PD", "enrichment_GSEA_KEGG.png")
+)
+```
+
+Foram observados enriquecimentos positivos para:
+
+- interação citocina–receptor;
+- complemento e coagulação;
+- sinalização por NF-κB;
+- módulos imunes compartilhados por categorias infecciosas e inflamatórias.
+
+### Síntese — PD
+
+<div class="result-box">
+
+**PD apresentou a assinatura diferencial mais extensa pelo critério principal.**  
+A análise funcional revelou um contraste claro entre enriquecimento imunoinflamatório positivo e redução de processos de neurotransmissão, potencial de membrana e sinalização neuronal.
+
+</div>
+
+---
+
+# 7. Comparação entre AD, HD e PD
+
+## 7.1 Expressão diferencial
+
+```{r cross-disease-de}
+if (!is.null(deseq_summary)) {
+
+  comparison <- deseq_summary %>%
+    select(
+      dataset,
+      n_genes_input,
+      n_DEG_primary,
+      n_up_primary,
+      n_down_primary,
+      n_DEG_sensitivity
+    ) %>%
+    rename(
+      Doença = dataset,
+      `Genes testados` = n_genes_input,
+      `DEGs principais` = n_DEG_primary,
+      Up = n_up_primary,
+      Down = n_down_primary,
+      `DEGs |log2FC| > 1` = n_DEG_sensitivity
+    )
+
+  kable(
+    comparison,
+    caption = "Comparação da expressão diferencial entre os três datasets."
+  )
+}
+```
+
+Os três estudos apresentaram perfis distintos.
+
+AD apresentou sinal estatístico fraco no nível de genes individuais, enquanto HD e PD apresentaram milhares de DEGs.
+
+PD apresentou maior número de genes ultrapassando o limiar principal de `|log2FC| > 0,58`, enquanto HD reteve maior número de genes quando foi aplicado o limiar mais restritivo de `|log2FC| > 1`.
+
+Essas diferenças não devem ser traduzidas diretamente como maior ou menor intensidade biológica de uma doença, pois os datasets diferem em tamanho amostral, variabilidade, características clínicas e estrutura técnica.
+
+## 7.2 Comparação dos PCA
+
+A porcentagem de variância explicada por PC1 + PC2 foi:
+
+- AD: 63%;
+- HD: 49%;
+- PD: 55%.
+
+Entretanto, variância explicada pelos componentes não equivale à variância explicada pelo diagnóstico.
+
+AD apresentou a maior proporção de variância concentrada nos dois primeiros PCs, mas também a maior sobreposição visual entre casos e controles. HD e PD mostraram tendência mais evidente de separação ao longo de PC1.
+
+## 7.3 Padrão funcional comparativo
+
+Nas três doenças emergiu um eixo funcional recorrente:
+
+\[
+\text{processos imunológicos/inflamatórios} \uparrow
+\]
+
+em contraste com:
+
+\[
+\text{processos neuronais/sinápticos} \downarrow
+\]
+
+Esse padrão foi mais explícito em HD e PD, nos quais ORA e GSEA convergiram, mas também foi detectado em AD por GSEA mesmo na ausência de DEGs individuais.
+
+---
+
+# 8. Integração transdiagnóstica
+
+## 8.1 Universo comum testável
+
+O universo comum testável foi composto por **`r fmt_int(get_integration("common_testable_universe"))` genes**.
+
+A utilização de um universo comum evita interpretar como "não significativo" em um dataset um gene que não estava disponível ou testável naquele estudo.
+
+## 8.2 Distribuição dos DEGs no universo comum
+
+```{r primary-patterns, fig.cap="Distribuição dos DEGs do critério principal entre AD, HD e PD no universo comum testável."}
+show_figure(
+  integration_plot_path("primary_deg_patterns.png")
+)
+```
+
+No universo comum testável, os DEGs principais distribuíram-se em:
+
+- AD exclusivo: `r fmt_int(get_integration("primary_AD_only"))`;
+- HD exclusivo: `r fmt_int(get_integration("primary_HD_only"))`;
+- PD exclusivo: `r fmt_int(get_integration("primary_PD_only"))`;
+- HD + PD: `r fmt_int(get_integration("primary_HD_PD"))`;
+- AD + HD + PD: `r fmt_int(get_integration("primary_AD_HD_PD"))`.
+
+## 8.3 Diagrama de Venn — critério principal
+
+```{r venn-primary, fig.cap="Interseção dos DEGs entre AD, HD e PD segundo o critério principal. As áreas dos círculos são esquemáticas e não proporcionais ao número de genes."}
+show_figure(
+  integration_plot_path("venn_primary_AD_HD_PD.png")
+)
+```
+
+A interseção gênica estrita concentrou-se em HD e PD.
+
+Foram compartilhados **`r fmt_int(get_integration("primary_HD_PD"))` DEGs entre HD e PD**, enquanto AD não apresentou DEGs pelo critério principal.
+
+O Venn deve ser interpretado como representação dos conjuntos e de suas interseções; as áreas não são proporcionais aos tamanhos dos conjuntos.
+
+## 8.4 Diagrama de Venn — análise de sensibilidade
+
+```{r venn-sensitivity, fig.cap="Interseção dos DEGs entre AD, HD e PD na análise de sensibilidade (FDR < 0,05 e |log2FC| > 1). As áreas dos círculos são esquemáticas."}
+show_figure(
+  integration_plot_path("venn_sensitivity_AD_HD_PD.png")
+)
+```
+
+A análise de sensibilidade mantém FDR < 0,05, mas exige maior magnitude de efeito. Ela permite avaliar se o compartilhamento observado permanece quando são considerados apenas efeitos mais fortes.
+
+## 8.5 Concordância dos efeitos — HD versus PD
+
+```{r hd-pd-effect, fig.cap="Relação entre os log2FoldChanges de HD e PD no universo comum testável."}
+show_figure(
+  integration_plot_path("log2FC_HD_vs_PD.png")
+)
+```
+
+A correlação de Spearman entre HD e PD foi:
+
+\[
+\rho = `r fmt_num(get_rho("HD-PD"), 3)`
+\]
+
+indicando **concordância positiva moderada** entre os efeitos de expressão.
+
+Em contraste:
+
+\[
+\rho_{AD,HD} = `r fmt_num(get_rho("AD-HD"), 3)`
+\]
+
+e
+
+\[
+\rho_{AD,PD} = `r fmt_num(get_rho("AD-PD"), 3)`.
+\]
+
+Assim, a concordância global gene a gene foi muito maior entre HD e PD do que nas comparações envolvendo AD.
+
+A ausência de correlação gênica forte envolvendo AD não contradiz a presença de convergência funcional, pois doenças distintas podem alterar genes diferentes pertencentes aos mesmos processos biológicos.
+
+## 8.6 Genes direcionalmente concordantes
+
+Foram identificados **`r fmt_int(get_integration("directionally_concordant_all_three"))` genes** com o mesmo sinal de `log2FoldChange` nas três doenças.
+
+Esse número não representa DEGs transdiagnósticos, pois concordância de direção foi calculada independentemente da significância estatística.
+
+## 8.7 GSEA compartilhado — GO Biological Process
+
+```{r shared-gsea-go, fig.cap="Termos GO Biological Process significativamente enriquecidos em pelo menos duas doenças e respectivos NES."}
+show_figure(
+  integration_plot_path("shared_GSEA_GO_BP.png")
+)
+```
+
+A integração de GO BP revelou forte convergência funcional.
+
+Entre os processos com **NES positivo nas três doenças** destacaram-se:
+
+- resposta imune adaptativa;
+- resposta imune humoral;
+- produção e regulação de citocinas;
+- produção e regulação de quimiocinas;
+- ativação do complemento;
+- via clássica do complemento;
+- processamento e apresentação de antígenos;
+- apresentação de antígenos via MHC classe II;
+- resposta e detoxificação relacionadas a metais.
+
+Em contraste, processos relacionados à:
+
+- modulação da transmissão sináptica química;
+- regulação da sinalização trans-sináptica;
+
+apresentaram **NES negativo nas três doenças**.
+
+Esse resultado fornece evidência de que a convergência entre AD, HD e PD é mais evidente no nível funcional do que na interseção estrita de genes individuais.
+
+Também foram observados processos divergentes. Organização da matriz extracelular, organização de estruturas extracelulares e adesão célula-substrato apresentaram NES negativo em AD e positivo em HD e PD, sugerindo componentes específicos ou diferencialmente regulados entre as doenças.
+
+## 8.8 GSEA compartilhado — KEGG
+
+```{r shared-gsea-kegg, fig.cap="Vias KEGG significativamente enriquecidas em pelo menos duas doenças e respectivos NES."}
+show_figure(
+  integration_plot_path("shared_GSEA_KEGG.png")
+)
+```
+
+A análise KEGG reforçou o eixo imunológico compartilhado.
+
+Entre as vias positivas nas três doenças destacaram-se:
+
+- complemento e coagulação;
+- processamento e apresentação de antígenos;
+- linhagem hematopoiética;
+- categorias autoimunes/inflamatórias;
+- categorias infecciosas que compartilham módulos de resposta imune.
+
+Esses termos não foram interpretados como presença literal das doenças nomeadas no KEGG, mas como consequência do compartilhamento de genes de imunidade, complemento, MHC, citocinas e receptores.
+
+Também foram identificados componentes divergentes, como `Cytoskeleton in muscle cells` e `ATP-dependent chromatin remodeling`, com direção negativa em AD e positiva em HD/PD.
+
+## 8.9 Síntese da integração
+
+<div class="result-box">
+
+A integração revelou três níveis distintos de relação entre as doenças:
+
+**1. Convergência gênica:** mais evidente entre HD e PD, com compartilhamento de DEGs e correlação moderada dos efeitos.
+
+**2. Convergência funcional:** presente nas três doenças, incluindo AD, caracterizada principalmente por enriquecimento positivo de processos imunológicos e enriquecimento negativo de processos sinápticos.
+
+**3. Divergência funcional:** alguns processos, especialmente relacionados à matriz extracelular, adesão e componentes estruturais, apresentaram direções diferentes em AD versus HD/PD.
+
+</div>
+
+---
+
+# 9. Relação com a futura deconvolução celular
+
+Um dos principais achados desta fase foi o contraste recorrente entre:
+
+\[
+\text{assinaturas imunes/gliais} \uparrow
+\]
+
+e
+
+\[
+\text{assinaturas neuronais/sinápticas} \downarrow
+\]
+
+Entretanto, bulk RNA-seq não permite determinar diretamente se esse padrão decorre de:
+
+1. alteração da expressão dentro de um mesmo tipo celular;
+2. alteração das proporções celulares presentes no tecido;
+3. combinação dos dois mecanismos.
+
+Por exemplo, maior expressão de genes imunes pode refletir aumento relativo de populações gliais/imunes, alteração do estado transcricional dessas células ou ambos.
+
+Da mesma forma, redução de genes sinápticos pode refletir diminuição da fração neuronal, perda neuronal, alteração da função dos neurônios remanescentes ou combinação desses fatores.
+
+A próxima etapa do projeto utilizará deconvolução celular para investigar essa questão, empregando uma referência de snRNA-seq e múltiplos algoritmos independentes.
+
+---
+
+# 10. Limitações
+
+A interpretação desta fase deve considerar algumas limitações.
+
+Primeiro, os datasets apresentam diferenças de tamanho amostral e disponibilidade de covariáveis. O modelo principal foi deliberadamente padronizado como `~ group`, de modo que fatores como idade, PMI, RIN e sexo não foram incorporados de forma uniforme em todos os estudos.
+
+Segundo, AD apresentou baixo poder estatístico no nível de genes individuais, com apenas 17 amostras e ausência de DEGs após correção por múltiplos testes. Por isso, a contribuição de AD para a integração é mais evidente no nível funcional do GSEA.
+
+Terceiro, GO e KEGG apresentam redundância entre termos. Diferentes categorias podem refletir parcialmente os mesmos genes ou módulos biológicos. Assim, a interpretação deve priorizar temas funcionais recorrentes e, quando necessário, os genes de `core_enrichment`.
+
+Quarto, categorias KEGG nomeadas por infecções, doenças autoimunes ou outros contextos clínicos não devem ser interpretadas literalmente. O enriquecimento frequentemente decorre de genes imunológicos compartilhados entre essas categorias.
+
+Quinto, bulk RNA-seq mistura sinais provenientes de múltiplos tipos celulares. Portanto, alterações funcionais observadas nesta fase não distinguem mudanças de composição celular de mudanças de expressão intrínseca.
+
+Por fim, a fase atual utiliza matrizes de contagens disponibilizadas publicamente. Em uma etapa posterior, os dados serão reprocessados de forma padronizada a partir das leituras brutas, permitindo avaliar a influência das decisões de quantificação e processamento.
+
+---
+
+# 11. Conclusão da Fase 01
+
+A análise padronizada das matrizes de contagens revelou comportamentos distintos no nível de genes individuais, mas convergência importante no nível funcional.
+
+AD não apresentou DEGs segundo o critério principal, enquanto HD e PD apresentaram **`r fmt_int(get_de("HD", "n_DEG_primary"))`** e **`r fmt_int(get_de("PD", "n_DEG_primary"))`** DEGs, respectivamente.
+
+A integração gênica identificou **`r fmt_int(get_integration("primary_HD_PD"))` DEGs compartilhados entre HD e PD** dentro do universo comum testável de **`r fmt_int(get_integration("common_testable_universe"))` genes**. A concordância dos efeitos entre HD e PD foi moderada (`Spearman ρ = `r fmt_num(get_rho("HD-PD"), 3)`), enquanto as comparações envolvendo AD apresentaram correlação global baixa.
+
+Apesar disso, a integração por GSEA revelou uma assinatura funcional transdiagnóstica consistente. Processos relacionados à resposta imune, citocinas, quimiocinas, complemento e apresentação antigênica apresentaram enriquecimento positivo recorrente, enquanto processos relacionados à transmissão e sinalização sináptica apresentaram enriquecimento negativo nas três doenças.
+
+Assim, a principal conclusão da Fase 01 é que:
+
+> **a convergência entre AD, HD e PD é mais evidente no nível de processos biológicos coordenados do que na sobreposição estrita de genes diferencialmente expressos.**
+
+Esse achado fornece a base para a próxima etapa do projeto, na qual a deconvolução celular será utilizada para investigar em que medida o eixo imunológico positivo e o eixo neuronal negativo estão associados a alterações na composição celular do tecido ou a mudanças transcriptômicas dentro dos próprios tipos celulares.
+
+---
