@@ -3,92 +3,64 @@
 # ==============================================================================
 # 07_cross_disease_integration.R
 #
-# INTEGRAÇÃO TRANSDIAGNÓSTICA
-#
-# Doenças:
-#   AD = Alzheimer
-#   HD = Huntington
-#   PD = Parkinson
+# INTEGRAÇÃO TRANSDIAGNÓSTICA — AD, HD e PD
 #
 # OBJETIVOS
 # ------------------------------------------------------------------------------
-# Nível gênico:
+# 1. Manter uma análise transdiagnóstica harmonizada baseada no universo comum
+#    testável entre AD, HD e PD.
 #
-# 1. Construir universo comum testável.
+# 2. Manter os diagramas de Venn do universo comum testável:
+#       - critério principal:
+#           FDR < 0.05 e |log2FC| > 0.58
+#       - análise de sensibilidade:
+#           FDR < 0.05 e |log2FC| > 1
 #
-# 2. Comparar DEGs pelo critério principal:
+# 3. Acrescentar um Venn "article-like", comparável conceitualmente ao artigo:
+#       p-value < 0.05 e |log2FC| > 1
 #
-#       padj < 0.05 e |log2FoldChange| > 0.58
+#    IMPORTANTE:
+#    esse Venn usa as LISTAS COMPLETAS de genes que satisfazem esse critério
+#    em cada dataset, sem restringir ao universo comum AD∩HD∩PD.
 #
-# 3. Comparar DEGs pela análise de sensibilidade:
+# 4. Corrigir a análise de concordância HD vs PD:
+#       - usar o universo pareado HD∩PD;
+#       - não deixar AD determinar quais genes entram no scatter;
+#       - calcular Spearman nesse universo pareado;
+#       - mostrar rho e n no gráfico;
+#       - adicionar linha y = x para referência de magnitude;
+#       - distinguir DEGs de HD, PD, compartilhados e não-DEGs.
 #
-#       padj < 0.05 e |log2FoldChange| > 1
+# 5. Calcular correlações de Spearman em universos PAREADOS:
+#       AD∩HD, AD∩PD e HD∩PD.
 #
-# 4. Identificar:
-#       - genes exclusivos;
-#       - genes compartilhados;
-#       - interseção HD + PD;
-#       - concordância de direção;
-#       - genes com mesmo sinal nas três doenças.
+# 6. Manter integração funcional por GSEA e ORA.
 #
-# 5. Calcular correlações de Spearman dos log2FC.
-#
-# Nível funcional:
-#
-# 6. Identificar termos GSEA compartilhados entre doenças.
-#
-# 7. Avaliar concordância de NES.
-#
-# 8. Comparar ORA entre HD e PD.
-#
-# Visualizações:
-#
-# 9. Distribuição dos padrões de DEGs.
-#
-# 10. Diagramas de Venn:
-#       - critério principal;
-#       - análise de sensibilidade.
-#
-# 11. Scatter HD vs PD.
-#
-# 12. Heatmaps de NES compartilhados.
-#
-# IMPORTANTE
+# CHAVE GÊNICA
 # ------------------------------------------------------------------------------
-# - NCBI GeneID é a chave primária.
-#
-# - Símbolo gênico é usado apenas como anotação.
-#
-# - Ausência de DEG não significa ausência de efeito.
-#
-# - AD possui zero DEGs pelo critério principal.
-#
-# - A integração transdiagnóstica não depende apenas da
-#   interseção estrita de listas de DEGs.
-#
-# - NES positivo/negativo representa direção do enriquecimento,
-#   não ativação/inibição fisiológica direta.
-#
-# - Os diagramas de Venn são esquemáticos.
-#   O tamanho dos círculos NÃO é proporcional ao número de genes.
+# NCBI GeneID é a chave primária.
+# Símbolos gênicos são utilizados somente como anotação.
 #
 # ENTRADAS
 # ------------------------------------------------------------------------------
 # results/deseq2/AD_deseq2_results.tsv
 # results/deseq2/HD_deseq2_results.tsv
 # results/deseq2/PD_deseq2_results.tsv
+# results/deseq2/deseq2_summary.tsv
 #
 # results/enrichment/GSEA_GO_BP.tsv
 # results/enrichment/GSEA_KEGG.tsv
 # results/enrichment/ORA_GO_BP.tsv
 # results/enrichment/ORA_KEGG.tsv
 #
-# SAÍDAS PRINCIPAIS
+# SAÍDAS
 # ------------------------------------------------------------------------------
 # results/integration/
 #   gene_integration.tsv
+#   hd_pd_pairwise_integration.tsv
 #   primary_pattern_summary.tsv
 #   sensitivity_pattern_summary.tsv
+#   venn_regions.tsv
 #   shared_primary_HD_PD.tsv
 #   directionally_concordant_AD_HD_PD.tsv
 #   log2FC_spearman_correlations.tsv
@@ -100,12 +72,17 @@
 #
 # results/plots/integration/
 #   primary_deg_patterns.png
-#   venn_primary_AD_HD_PD.png
-#   venn_sensitivity_AD_HD_PD.png
-#   log2FC_HD_vs_PD.png
+#   venn_common_primary_AD_HD_PD.png
+#   venn_common_sensitivity_AD_HD_PD.png
+#   venn_article_like_nominal_AD_HD_PD.png
+#   log2FC_HD_vs_PD_pairwise.png
 #   shared_GSEA_GO_BP.png
 #   shared_GSEA_KEGG.png
 #
+# OBSERVAÇÃO SOBRE CACHE
+# ------------------------------------------------------------------------------
+# Este script remove explicitamente os PNGs que ele próprio vai recriar antes
+# de chamar ggsave(). O relatório HTML deve ser renderizado com cache = FALSE.
 # ==============================================================================
 
 
@@ -118,7 +95,6 @@ required_packages <- c(
   "ggplot2"
 )
 
-
 missing_packages <- required_packages[
   !vapply(
     required_packages,
@@ -128,9 +104,7 @@ missing_packages <- required_packages[
   )
 ]
 
-
 if (length(missing_packages) > 0) {
-
   stop(
     paste0(
       "Pacotes necessários não instalados:\n",
@@ -142,12 +116,9 @@ if (length(missing_packages) > 0) {
   )
 }
 
-
 suppressPackageStartupMessages({
-
   library(data.table)
   library(ggplot2)
-
 })
 
 
@@ -157,6 +128,8 @@ suppressPackageStartupMessages({
 
 alpha <- 0.05
 
+primary_lfc <- 0.58
+sensitivity_lfc <- 1
 
 datasets <- c(
   "AD",
@@ -170,32 +143,33 @@ datasets <- c(
 # ==============================================================================
 
 disease_colors <- c(
-
   "AD" = "#7B2CBF",
-
   "HD" = "#277DA1",
-
   "PD" = "#E75480"
-
 )
 
-
 pattern_colors <- c(
-
   "AD only" = "#7B2CBF",
-
   "HD only" = "#277DA1",
-
   "PD only" = "#E75480",
-
   "AD+HD" = "#D10404",
-
   "AD+PD" = "#F8A304",
-
   "HD+PD" = "#18C900",
-
   "AD+HD+PD" = "#00BFC4"
+)
 
+scatter_colors <- c(
+  "Not_DEG" = "#CFCFCF",
+  "HD_only" = "#277DA1",
+  "PD_only" = "#E75480",
+  "HD+PD" = "#DF9203"
+)
+
+scatter_alpha <- c(
+  "Not_DEG" = 0.28,
+  "HD_only" = 0.62,
+  "PD_only" = 0.62,
+  "HD+PD" = 0.85
 )
 
 
@@ -204,7 +178,6 @@ pattern_colors <- c(
 # ==============================================================================
 
 deseq_files <- setNames(
-
   file.path(
     "results/deseq2",
     paste0(
@@ -212,40 +185,32 @@ deseq_files <- setNames(
       "_deseq2_results.tsv"
     )
   ),
-
   datasets
 )
 
+deseq_summary_file <- file.path(
+  "results/deseq2",
+  "deseq2_summary.tsv"
+)
 
 gsea_files <- c(
-
   "GO_BP" = "results/enrichment/GSEA_GO_BP.tsv",
-
   "KEGG" = "results/enrichment/GSEA_KEGG.tsv"
-
 )
-
 
 ora_files <- c(
-
   "GO_BP" = "results/enrichment/ORA_GO_BP.tsv",
-
   "KEGG" = "results/enrichment/ORA_KEGG.tsv"
-
 )
 
-
 output_dir <- "results/integration"
-
 plot_dir <- "results/plots/integration"
-
 
 dir.create(
   output_dir,
   recursive = TRUE,
   showWarnings = FALSE
 )
-
 
 dir.create(
   plot_dir,
@@ -260,18 +225,16 @@ dir.create(
 
 input_files <- c(
   deseq_files,
+  deseq_summary_file,
   gsea_files,
   ora_files
 )
-
 
 missing_files <- input_files[
   !file.exists(input_files)
 ]
 
-
 if (length(missing_files) > 0) {
-
   stop(
     paste0(
       "Arquivos necessários não encontrados:\n",
@@ -296,21 +259,17 @@ if (length(missing_files) > 0) {
 as_logical_safe <- function(x) {
 
   if (is.logical(x)) {
-
     return(x)
   }
-
 
   x_chr <- toupper(
     as.character(x)
   )
 
-
   out <- rep(
     NA,
     length(x_chr)
   )
-
 
   out[
     x_chr %in% c(
@@ -320,7 +279,6 @@ as_logical_safe <- function(x) {
     )
   ] <- TRUE
 
-
   out[
     x_chr %in% c(
       "FALSE",
@@ -329,15 +287,12 @@ as_logical_safe <- function(x) {
     )
   ] <- FALSE
 
-
   bad_idx <- (
     is.na(out) &
       !is.na(x)
   )
 
-
   if (any(bad_idx)) {
-
     stop(
       "Valores lógicos inesperados: ",
       paste(
@@ -351,7 +306,6 @@ as_logical_safe <- function(x) {
     )
   }
 
-
   return(out)
 }
 
@@ -363,7 +317,6 @@ as_logical_safe <- function(x) {
 effect_direction <- function(x) {
 
   fcase(
-
     is.na(x),
     NA_character_,
 
@@ -386,7 +339,6 @@ first_nonmissing <- function(...) {
 
   values <- list(...)
 
-
   out <- rep(
     NA_character_,
     length(
@@ -394,11 +346,9 @@ first_nonmissing <- function(...) {
     )
   )
 
-
   for (v in values) {
 
     v <- as.character(v)
-
 
     use <- (
       is.na(out) &
@@ -406,14 +356,12 @@ first_nonmissing <- function(...) {
         v != ""
     )
 
-
     out[
       use
     ] <- v[
       use
     ]
   }
-
 
   return(out)
 }
@@ -429,33 +377,25 @@ read_deseq_result <- function(dataset_name) {
     deseq_files[[dataset_name]]
   )
 
-
   required <- c(
-
     "gene_id",
     "symbol",
-
     "log2FoldChange",
     "stat",
     "pvalue",
     "padj",
-
     "DEG",
     "direction",
-
     "DEG_sensitivity",
     "direction_sensitivity"
   )
-
 
   missing <- setdiff(
     required,
     names(dt)
   )
 
-
   if (length(missing) > 0) {
-
     stop(
       dataset_name,
       ": colunas ausentes no resultado do DESeq2: ",
@@ -466,14 +406,12 @@ read_deseq_result <- function(dataset_name) {
     )
   }
 
-
   dt[
     ,
     gene_id := as.character(
       gene_id
     )
   ]
-
 
   dt[
     ,
@@ -482,14 +420,12 @@ read_deseq_result <- function(dataset_name) {
     )
   ]
 
-
   dt[
     ,
     DEG := as_logical_safe(
       DEG
     )
   ]
-
 
   dt[
     ,
@@ -498,48 +434,50 @@ read_deseq_result <- function(dataset_name) {
     )
   ]
 
+  # Critério nominal comparável ao empregado no artigo:
+  # p < 0.05 e |log2FC| > 1
+  dt[
+    ,
+    DEG_article_like := (
+      !is.na(pvalue) &
+        pvalue < alpha &
+        !is.na(log2FoldChange) &
+        abs(log2FoldChange) > sensitivity_lfc
+    )
+  ]
 
   if (anyNA(dt$gene_id)) {
-
     stop(
       dataset_name,
       ": existem GeneIDs ausentes."
     )
   }
 
-
   if (anyDuplicated(dt$gene_id)) {
-
     stop(
       dataset_name,
       ": existem GeneIDs duplicados."
     )
   }
 
-
   return(dt)
 }
 
 
 # ------------------------------------------------------------------------------
-# 6.5. Criar resumo completo de padrões
+# 6.5. Resumo completo dos padrões
 # ------------------------------------------------------------------------------
 
 pattern_levels <- c(
-
   "AD only",
   "HD only",
   "PD only",
-
   "AD+HD",
   "AD+PD",
   "HD+PD",
-
   "AD+HD+PD",
-
   "None"
 )
-
 
 make_pattern_summary <- function(
   pattern_vector,
@@ -556,30 +494,22 @@ make_pattern_summary <- function(
     by = pattern
   ]
 
-
   out <- data.table(
     pattern = pattern_levels
   )
 
-
   out <- merge(
-
     out,
     counts,
-
     by = "pattern",
-
     all.x = TRUE,
-
     sort = FALSE
   )
-
 
   out[
     is.na(n_genes),
     n_genes := 0L
   ]
-
 
   setnames(
     out,
@@ -587,95 +517,104 @@ make_pattern_summary <- function(
     column_name
   )
 
-
   return(out)
 }
 
 
 # ------------------------------------------------------------------------------
-# 6.6. Criar diagrama de Venn customizado
-#
-# IMPORTANTE:
-# os círculos têm o mesmo tamanho.
-# Portanto, a área NÃO representa a quantidade de genes.
+# 6.6. Calcular as sete regiões exclusivas de um Venn de três conjuntos
 # ------------------------------------------------------------------------------
 
-create_venn_plot <- function(
-  pattern_dt,
-  pattern_column,
-  title,
-  subtitle
-) {
+calculate_venn_regions <- function(sets) {
 
-  dt <- copy(
-    pattern_dt
-  )
-
-
-  setnames(
-    dt,
-    pattern_column,
-    "pattern"
-  )
-
-
-  get_n <- function(pattern_name) {
-
-    value <- dt[
-      pattern == pattern_name,
-      n_genes
-    ]
-
-
-    if (length(value) == 0) {
-
-      return(0L)
-    }
-
-
-    return(
-      as.integer(
-        value[1]
-      )
+  if (!all(
+    c(
+      "AD",
+      "HD",
+      "PD"
+    ) %in% names(sets)
+  )) {
+    stop(
+      "calculate_venn_regions(): os conjuntos devem se chamar AD, HD e PD."
     )
   }
 
-
-  theta <- seq(
-    0,
-    2 * pi,
-    length.out = 600
-  )
-
-
-  circle_data <- rbindlist(
-
-    list(
-
-      data.table(
-        x = -0.85 + 1.45 * cos(theta),
-        y =  0.55 + 1.45 * sin(theta),
-        disease = "AD"
-      ),
-
-      data.table(
-        x =  0.85 + 1.45 * cos(theta),
-        y =  0.55 + 1.45 * sin(theta),
-        disease = "HD"
-      ),
-
-      data.table(
-        x =  0.00 + 1.45 * cos(theta),
-        y = -0.85 + 1.45 * sin(theta),
-        disease = "PD"
-      )
-
+  AD <- unique(
+    as.character(
+      sets[["AD"]]
     )
   )
 
+  HD <- unique(
+    as.character(
+      sets[["HD"]]
+    )
+  )
 
-  counts <- data.table(
+  PD <- unique(
+    as.character(
+      sets[["PD"]]
+    )
+  )
 
+  triple <- Reduce(
+    intersect,
+    list(
+      AD,
+      HD,
+      PD
+    )
+  )
+
+  AD_HD <- setdiff(
+    intersect(
+      AD,
+      HD
+    ),
+    triple
+  )
+
+  AD_PD <- setdiff(
+    intersect(
+      AD,
+      PD
+    ),
+    triple
+  )
+
+  HD_PD <- setdiff(
+    intersect(
+      HD,
+      PD
+    ),
+    triple
+  )
+
+  AD_only <- setdiff(
+    AD,
+    union(
+      HD,
+      PD
+    )
+  )
+
+  HD_only <- setdiff(
+    HD,
+    union(
+      AD,
+      PD
+    )
+  )
+
+  PD_only <- setdiff(
+    PD,
+    union(
+      AD,
+      HD
+    )
+  )
+
+  regions <- data.table(
     pattern = c(
       "AD only",
       "HD only",
@@ -685,7 +624,150 @@ create_venn_plot <- function(
       "HD+PD",
       "AD+HD+PD"
     ),
+    n_genes = c(
+      length(AD_only),
+      length(HD_only),
+      length(PD_only),
+      length(AD_HD),
+      length(AD_PD),
+      length(HD_PD),
+      length(triple)
+    )
+  )
 
+  totals <- data.table(
+    dataset = c(
+      "AD",
+      "HD",
+      "PD"
+    ),
+    n_genes = c(
+      length(AD),
+      length(HD),
+      length(PD)
+    )
+  )
+
+  reconstructed_AD <- (
+    length(AD_only) +
+      length(AD_HD) +
+      length(AD_PD) +
+      length(triple)
+  )
+
+  reconstructed_HD <- (
+    length(HD_only) +
+      length(AD_HD) +
+      length(HD_PD) +
+      length(triple)
+  )
+
+  reconstructed_PD <- (
+    length(PD_only) +
+      length(AD_PD) +
+      length(HD_PD) +
+      length(triple)
+  )
+
+  if (reconstructed_AD != length(AD)) {
+    stop(
+      "Erro interno no Venn: regiões de AD não reproduzem o total de AD."
+    )
+  }
+
+  if (reconstructed_HD != length(HD)) {
+    stop(
+      "Erro interno no Venn: regiões de HD não reproduzem o total de HD."
+    )
+  }
+
+  if (reconstructed_PD != length(PD)) {
+    stop(
+      "Erro interno no Venn: regiões de PD não reproduzem o total de PD."
+    )
+  }
+
+  return(
+    list(
+      regions = regions,
+      totals = totals
+    )
+  )
+}
+
+
+# ------------------------------------------------------------------------------
+# 6.7. Criar diagrama de Venn customizado
+#
+# IMPORTANTE:
+# os círculos têm o mesmo tamanho.
+# A área NÃO é proporcional ao número de genes.
+# ------------------------------------------------------------------------------
+
+create_venn_plot <- function(
+  venn_result,
+  title,
+  subtitle
+) {
+
+  dt <- copy(
+    venn_result$regions
+  )
+
+  get_n <- function(pattern_name) {
+
+    value <- dt[
+      pattern == pattern_name,
+      n_genes
+    ]
+
+    if (length(value) == 0) {
+      return(0L)
+    }
+
+    return(
+      as.integer(
+        value[1]
+      )
+    )
+  }
+
+  theta <- seq(
+    0,
+    2 * pi,
+    length.out = 600
+  )
+
+  circle_data <- rbindlist(
+    list(
+      data.table(
+        x = -0.85 + 1.45 * cos(theta),
+        y =  0.55 + 1.45 * sin(theta),
+        disease = "AD"
+      ),
+      data.table(
+        x =  0.85 + 1.45 * cos(theta),
+        y =  0.55 + 1.45 * sin(theta),
+        disease = "HD"
+      ),
+      data.table(
+        x =  0.00 + 1.45 * cos(theta),
+        y = -0.85 + 1.45 * sin(theta),
+        disease = "PD"
+      )
+    )
+  )
+
+  counts <- data.table(
+    pattern = c(
+      "AD only",
+      "HD only",
+      "PD only",
+      "AD+HD",
+      "AD+PD",
+      "HD+PD",
+      "AD+HD+PD"
+    ),
     n = c(
       get_n("AD only"),
       get_n("HD only"),
@@ -695,7 +777,6 @@ create_venn_plot <- function(
       get_n("HD+PD"),
       get_n("AD+HD+PD")
     ),
-
     x = c(
       -1.25,
        1.25,
@@ -705,7 +786,6 @@ create_venn_plot <- function(
        0.75,
        0.00
     ),
-
     y = c(
        0.85,
        0.85,
@@ -716,7 +796,6 @@ create_venn_plot <- function(
        0.25
     )
   )
-
 
   p <- ggplot() +
 
@@ -817,7 +896,6 @@ create_venn_plot <- function(
     theme_void() +
 
     theme(
-
       legend.position = "none",
 
       plot.title = element_text(
@@ -826,7 +904,7 @@ create_venn_plot <- function(
       ),
 
       plot.subtitle = element_text(
-        size = 14
+        size = 13
       ),
 
       plot.margin = margin(
@@ -837,8 +915,133 @@ create_venn_plot <- function(
       )
     )
 
-
   return(p)
+}
+
+
+# ------------------------------------------------------------------------------
+# 6.8. Preparar resultado de um dataset para merge
+# ------------------------------------------------------------------------------
+
+prepare_for_merge <- function(
+  dt,
+  prefix,
+  universe
+) {
+
+  x <- dt[
+    gene_id %in% universe,
+    .(
+      gene_id,
+      symbol,
+      log2FoldChange,
+      stat,
+      pvalue,
+      padj,
+      DEG,
+      direction,
+      DEG_sensitivity,
+      direction_sensitivity,
+      DEG_article_like
+    )
+  ]
+
+  columns_to_rename <- setdiff(
+    names(x),
+    "gene_id"
+  )
+
+  setnames(
+    x,
+    old = columns_to_rename,
+    new = paste0(
+      columns_to_rename,
+      "_",
+      prefix
+    )
+  )
+
+  return(x)
+}
+
+
+# ------------------------------------------------------------------------------
+# 6.9. Correlação pareada
+# ------------------------------------------------------------------------------
+
+compute_pairwise_correlation <- function(
+  dataset_a,
+  dataset_b,
+  results_list,
+  testable_ids
+) {
+
+  pair_universe <- intersect(
+    testable_ids[[dataset_a]],
+    testable_ids[[dataset_b]]
+  )
+
+  a <- results_list[[dataset_a]][
+    gene_id %in% pair_universe,
+    .(
+      gene_id,
+      log2FoldChange
+    )
+  ]
+
+  b <- results_list[[dataset_b]][
+    gene_id %in% pair_universe,
+    .(
+      gene_id,
+      log2FoldChange
+    )
+  ]
+
+  setnames(
+    a,
+    "log2FoldChange",
+    "lfc_a"
+  )
+
+  setnames(
+    b,
+    "log2FoldChange",
+    "lfc_b"
+  )
+
+  pair_dt <- merge(
+    a,
+    b,
+    by = "gene_id",
+    all = FALSE,
+    sort = FALSE
+  )
+
+  rho <- cor(
+    pair_dt$lfc_a,
+    pair_dt$lfc_b,
+    method = "spearman",
+    use = "complete.obs"
+  )
+
+  return(
+    data.table(
+      pair = paste0(
+        dataset_a,
+        "-",
+        dataset_b
+      ),
+      universe = paste0(
+        dataset_a,
+        "∩",
+        dataset_b
+      ),
+      n_genes = nrow(
+        pair_dt
+      ),
+      spearman_rho = rho
+    )
+  )
 }
 
 
@@ -851,53 +1054,129 @@ results_list <- lapply(
   read_deseq_result
 )
 
-
 names(
   results_list
 ) <- datasets
 
 
 # ==============================================================================
-# 8. UNIVERSO TESTÁVEL POR DATASET
-#
-# Gene testável:
-# possui p-value e log2FoldChange válidos.
+# 8. AUDITAR TOTAIS DO 05_DESEQ2.R
+# ==============================================================================
+
+deseq_summary <- fread(
+  deseq_summary_file
+)
+
+required_summary_columns <- c(
+  "dataset",
+  "n_DEG_primary",
+  "n_DEG_sensitivity"
+)
+
+missing_summary_columns <- setdiff(
+  required_summary_columns,
+  names(
+    deseq_summary
+  )
+)
+
+if (length(missing_summary_columns) > 0) {
+  stop(
+    "deseq2_summary.tsv não contém: ",
+    paste(
+      missing_summary_columns,
+      collapse = ", "
+    )
+  )
+}
+
+for (dataset_name in datasets) {
+
+  dt <- results_list[[dataset_name]]
+
+  observed_primary <- sum(
+    dt$DEG,
+    na.rm = TRUE
+  )
+
+  observed_sensitivity <- sum(
+    dt$DEG_sensitivity,
+    na.rm = TRUE
+  )
+
+  expected_primary <- deseq_summary[
+    dataset == dataset_name,
+    n_DEG_primary
+  ]
+
+  expected_sensitivity <- deseq_summary[
+    dataset == dataset_name,
+    n_DEG_sensitivity
+  ]
+
+  if (length(expected_primary) != 1) {
+    stop(
+      dataset_name,
+      ": número inesperado de linhas em deseq2_summary.tsv."
+    )
+  }
+
+  if (observed_primary != expected_primary) {
+    stop(
+      dataset_name,
+      ": DEG no arquivo completo = ",
+      observed_primary,
+      ", mas deseq2_summary.tsv informa ",
+      expected_primary,
+      "."
+    )
+  }
+
+  if (observed_sensitivity != expected_sensitivity) {
+    stop(
+      dataset_name,
+      ": DEG_sensitivity no arquivo completo = ",
+      observed_sensitivity,
+      ", mas deseq2_summary.tsv informa ",
+      expected_sensitivity,
+      "."
+    )
+  }
+}
+
+
+# ==============================================================================
+# 9. UNIVERSOS TESTÁVEIS
 # ==============================================================================
 
 testable_ids <- lapply(
-
   results_list,
-
   function(dt) {
 
     unique(
-
       dt[
         !is.na(pvalue) &
           !is.na(log2FoldChange),
         gene_id
       ]
-
     )
   }
 )
-
-
-# ==============================================================================
-# 9. UNIVERSO COMUM TESTÁVEL
-# ==============================================================================
 
 common_universe <- Reduce(
   intersect,
   testable_ids
 )
 
+hd_pd_universe <- intersect(
+  testable_ids[["HD"]],
+  testable_ids[["PD"]]
+)
 
 cat("\n")
 cat("============================================================\n")
-cat("INTEGRAÇÃO TRANSDIAGNÓSTICA\n")
+cat("UNIVERSOS TESTÁVEIS\n")
 cat("============================================================\n")
-
 
 for (dataset_name in datasets) {
 
@@ -912,95 +1191,44 @@ for (dataset_name in datasets) {
   )
 }
 
+cat(
+  "AD ∩ HD ∩ PD: ",
+  length(common_universe),
+  " genes\n",
+  sep = ""
+)
 
 cat(
-  "Universo comum testável: ",
-  length(common_universe),
-  "\n",
+  "HD ∩ PD: ",
+  length(hd_pd_universe),
+  " genes\n",
   sep = ""
 )
 
 
 # ==============================================================================
-# 10. PREPARAR MATRIZES PARA INTEGRAÇÃO
+# 10. MATRIZ INTEGRADA — UNIVERSO COMUM AD ∩ HD ∩ PD
 # ==============================================================================
 
-prepare_for_merge <- function(
-  dt,
-  prefix
-) {
-
-  x <- dt[
-
-    gene_id %in% common_universe,
-
-    .(
-
-      gene_id,
-      symbol,
-
-      log2FoldChange,
-      stat,
-      pvalue,
-      padj,
-
-      DEG,
-      direction,
-
-      DEG_sensitivity,
-      direction_sensitivity
-    )
-  ]
-
-
-  columns_to_rename <- setdiff(
-    names(x),
-    "gene_id"
-  )
-
-
-  setnames(
-
-    x,
-
-    old = columns_to_rename,
-
-    new = paste0(
-      columns_to_rename,
-      "_",
-      prefix
-    )
-  )
-
-
-  return(x)
-}
-
-
-ad_merge <- prepare_for_merge(
+ad_common <- prepare_for_merge(
   results_list[["AD"]],
-  "AD"
+  "AD",
+  common_universe
 )
 
-
-hd_merge <- prepare_for_merge(
+hd_common <- prepare_for_merge(
   results_list[["HD"]],
-  "HD"
+  "HD",
+  common_universe
 )
 
-
-pd_merge <- prepare_for_merge(
+pd_common <- prepare_for_merge(
   results_list[["PD"]],
-  "PD"
+  "PD",
+  common_universe
 )
-
-
-# ==============================================================================
-# 11. MATRIZ INTEGRADA
-# ==============================================================================
 
 integrated <- Reduce(
-
   function(x, y) {
 
     merge(
@@ -1011,33 +1239,25 @@ integrated <- Reduce(
       sort = FALSE
     )
   },
-
   list(
-    ad_merge,
-    hd_merge,
-    pd_merge
+    ad_common,
+    hd_common,
+    pd_common
   )
 )
-
 
 if (
   nrow(integrated) !=
     length(common_universe)
 ) {
-
   stop(
-    "Matriz integrada possui ",
+    "Matriz comum possui ",
     nrow(integrated),
-    " genes, mas o universo comum possui ",
+    " genes, mas common_universe possui ",
     length(common_universe),
     "."
   )
 }
-
-
-# ==============================================================================
-# 12. SÍMBOLO CONSENSO
-# ==============================================================================
 
 integrated[
   ,
@@ -1050,7 +1270,7 @@ integrated[
 
 
 # ==============================================================================
-# 13. PADRÃO DO CRITÉRIO PRINCIPAL
+# 11. PADRÕES DE DEGs — UNIVERSO COMUM
 # ==============================================================================
 
 integrated[
@@ -1061,7 +1281,6 @@ integrated[
     as.integer(DEG_PD)
 ]
 
-
 integrated[
   ,
   primary_pattern := fcase(
@@ -1069,53 +1288,32 @@ integrated[
     DEG_AD &
       DEG_HD &
       DEG_PD,
-
     "AD+HD+PD",
-
 
     DEG_AD &
       DEG_HD,
-
     "AD+HD",
-
 
     DEG_AD &
       DEG_PD,
-
     "AD+PD",
-
 
     DEG_HD &
       DEG_PD,
-
     "HD+PD",
 
-
     DEG_AD,
-
     "AD only",
 
-
     DEG_HD,
-
     "HD only",
 
-
     DEG_PD,
-
     "PD only",
-
 
     default = "None"
   )
 ]
-
-
-# ==============================================================================
-# 14. PADRÃO DA ANÁLISE DE SENSIBILIDADE
-#
-# FDR < 0.05 e |log2FC| > 1
-# ==============================================================================
 
 integrated[
   ,
@@ -1131,7 +1329,6 @@ integrated[
     )
 ]
 
-
 integrated[
   ,
   sensitivity_pattern := fcase(
@@ -1139,42 +1336,28 @@ integrated[
     DEG_sensitivity_AD &
       DEG_sensitivity_HD &
       DEG_sensitivity_PD,
-
     "AD+HD+PD",
-
 
     DEG_sensitivity_AD &
       DEG_sensitivity_HD,
-
     "AD+HD",
-
 
     DEG_sensitivity_AD &
       DEG_sensitivity_PD,
-
     "AD+PD",
-
 
     DEG_sensitivity_HD &
       DEG_sensitivity_PD,
-
     "HD+PD",
 
-
     DEG_sensitivity_AD,
-
     "AD only",
 
-
     DEG_sensitivity_HD,
-
     "HD only",
 
-
     DEG_sensitivity_PD,
-
     "PD only",
-
 
     default = "None"
   )
@@ -1182,7 +1365,7 @@ integrated[
 
 
 # ==============================================================================
-# 15. DIREÇÃO DO EFEITO
+# 12. DIREÇÃO DOS EFEITOS — UNIVERSO COMUM
 # ==============================================================================
 
 integrated[
@@ -1192,7 +1375,6 @@ integrated[
   )
 ]
 
-
 integrated[
   ,
   effect_HD := effect_direction(
@@ -1200,14 +1382,12 @@ integrated[
   )
 ]
 
-
 integrated[
   ,
   effect_PD := effect_direction(
     log2FoldChange_PD
   )
 ]
-
 
 integrated[
   ,
@@ -1219,35 +1399,25 @@ integrated[
   )
 ]
 
-
-# ==============================================================================
-# 16. CONCORDÂNCIA DIRECIONAL NAS TRÊS DOENÇAS
-# ==============================================================================
-
 integrated[
   ,
   concordant_all_three := (
-
     effect_AD == effect_HD &
-
       effect_HD == effect_PD &
-
       effect_AD != "Zero" &
-
       !is.na(effect_AD)
   )
 ]
 
 
 # ==============================================================================
-# 17. RESUMOS DOS PADRÕES
+# 13. RESUMOS DOS PADRÕES — UNIVERSO COMUM
 # ==============================================================================
 
 primary_pattern_summary <- make_pattern_summary(
   integrated$primary_pattern,
   "primary_pattern"
 )
-
 
 sensitivity_pattern_summary <- make_pattern_summary(
   integrated$sensitivity_pattern,
@@ -1256,25 +1426,213 @@ sensitivity_pattern_summary <- make_pattern_summary(
 
 
 # ==============================================================================
-# 18. DEGs COMPARTILHADOS HD + PD
+# 14. VENNS — UNIVERSO COMUM TESTÁVEL
 # ==============================================================================
 
-shared_hd_pd <- integrated[
+common_primary_sets <- list(
+  AD = integrated[
+    DEG_AD == TRUE,
+    gene_id
+  ],
+  HD = integrated[
+    DEG_HD == TRUE,
+    gene_id
+  ],
+  PD = integrated[
+    DEG_PD == TRUE,
+    gene_id
+  ]
+)
+
+common_sensitivity_sets <- list(
+  AD = integrated[
+    DEG_sensitivity_AD == TRUE,
+    gene_id
+  ],
+  HD = integrated[
+    DEG_sensitivity_HD == TRUE,
+    gene_id
+  ],
+  PD = integrated[
+    DEG_sensitivity_PD == TRUE,
+    gene_id
+  ]
+)
+
+venn_common_primary <- calculate_venn_regions(
+  common_primary_sets
+)
+
+venn_common_sensitivity <- calculate_venn_regions(
+  common_sensitivity_sets
+)
+
+
+# ==============================================================================
+# 15. VENN — COMPARAÇÃO NOMINAL "ARTICLE-LIKE"
+#
+# p < 0.05 e |log2FC| > 1
+#
+# Usa as listas COMPLETAS de cada dataset.
+# ==============================================================================
+
+article_like_sets <- lapply(
+  results_list,
+  function(dt) {
+
+    unique(
+      dt[
+        DEG_article_like == TRUE,
+        gene_id
+      ]
+    )
+  }
+)
+
+venn_article_like <- calculate_venn_regions(
+  article_like_sets
+)
+
+
+# ==============================================================================
+# 16. AUDITORIA DOS VENNS
+# ==============================================================================
+
+cat("\n")
+cat("============================================================\n")
+cat("AUDITORIA DOS DIAGRAMAS DE VENN\n")
+cat("============================================================\n")
+
+cat("\nVenn — universo comum / critério principal:\n")
+print(
+  venn_common_primary$totals
+)
+print(
+  venn_common_primary$regions
+)
+
+cat("\nVenn — universo comum / sensibilidade:\n")
+print(
+  venn_common_sensitivity$totals
+)
+print(
+  venn_common_sensitivity$regions
+)
+
+cat("\nVenn — listas completas / critério nominal article-like:\n")
+print(
+  venn_article_like$totals
+)
+print(
+  venn_article_like$regions
+)
+
+cat("\n")
+
+
+# ==============================================================================
+# 17. MATRIZ PAREADA HD ∩ PD
+# ==============================================================================
+
+hd_pair <- prepare_for_merge(
+  results_list[["HD"]],
+  "HD",
+  hd_pd_universe
+)
+
+pd_pair <- prepare_for_merge(
+  results_list[["PD"]],
+  "PD",
+  hd_pd_universe
+)
+
+hd_pd_pairwise <- merge(
+  hd_pair,
+  pd_pair,
+  by = "gene_id",
+  all = FALSE,
+  sort = FALSE
+)
+
+if (
+  nrow(hd_pd_pairwise) !=
+    length(hd_pd_universe)
+) {
+  stop(
+    "Matriz HD∩PD possui ",
+    nrow(hd_pd_pairwise),
+    " genes, mas hd_pd_universe possui ",
+    length(hd_pd_universe),
+    "."
+  )
+}
+
+hd_pd_pairwise[
+  ,
+  symbol := first_nonmissing(
+    symbol_HD,
+    symbol_PD
+  )
+]
+
+hd_pd_pairwise[
+  ,
+  effect_HD := effect_direction(
+    log2FoldChange_HD
+  )
+]
+
+hd_pd_pairwise[
+  ,
+  effect_PD := effect_direction(
+    log2FoldChange_PD
+  )
+]
+
+hd_pd_pairwise[
+  ,
+  primary_class := fcase(
+
+    DEG_HD &
+      DEG_PD,
+    "HD+PD",
+
+    DEG_HD,
+    "HD_only",
+
+    DEG_PD,
+    "PD_only",
+
+    default = "Not_DEG"
+  )
+]
+
+hd_pd_pairwise[
+  ,
+  same_direction := (
+    effect_HD == effect_PD &
+      effect_HD != "Zero" &
+      !is.na(effect_HD)
+  )
+]
+
+
+# ==============================================================================
+# 18. DEGs COMPARTILHADOS HD + PD — UNIVERSO PAREADO
+# ==============================================================================
+
+shared_hd_pd <- hd_pd_pairwise[
   DEG_HD == TRUE &
     DEG_PD == TRUE
 ]
 
-
 shared_hd_pd[
   ,
   hd_pd_same_direction := (
-
     effect_HD == effect_PD &
-
       effect_HD != "Zero"
   )
 ]
-
 
 setorder(
   shared_hd_pd,
@@ -1282,11 +1640,9 @@ setorder(
   padj_PD
 )
 
-
 shared_hd_pd_same_direction <- shared_hd_pd[
   hd_pd_same_direction == TRUE
 ]
-
 
 shared_hd_pd_opposite_direction <- shared_hd_pd[
   hd_pd_same_direction == FALSE
@@ -1301,7 +1657,6 @@ concordant_three <- integrated[
   concordant_all_three == TRUE
 ]
 
-
 concordant_three[
   ,
   total_abs_log2FC :=
@@ -1309,7 +1664,6 @@ concordant_three[
     abs(log2FoldChange_HD) +
     abs(log2FoldChange_PD)
 ]
-
 
 setorder(
   concordant_three,
@@ -1319,53 +1673,41 @@ setorder(
 
 
 # ==============================================================================
-# 20. CORRELAÇÃO ENTRE log2FC
+# 20. CORRELAÇÕES DE SPEARMAN — UNIVERSOS PAREADOS
 # ==============================================================================
 
 correlation_summary <- rbindlist(
-
   list(
-
-    data.table(
-
-      pair = "AD-HD",
-
-      spearman_rho = cor(
-        integrated$log2FoldChange_AD,
-        integrated$log2FoldChange_HD,
-        method = "spearman",
-        use = "complete.obs"
-      )
+    compute_pairwise_correlation(
+      "AD",
+      "HD",
+      results_list,
+      testable_ids
     ),
-
-
-    data.table(
-
-      pair = "AD-PD",
-
-      spearman_rho = cor(
-        integrated$log2FoldChange_AD,
-        integrated$log2FoldChange_PD,
-        method = "spearman",
-        use = "complete.obs"
-      )
+    compute_pairwise_correlation(
+      "AD",
+      "PD",
+      results_list,
+      testable_ids
     ),
-
-
-    data.table(
-
-      pair = "HD-PD",
-
-      spearman_rho = cor(
-        integrated$log2FoldChange_HD,
-        integrated$log2FoldChange_PD,
-        method = "spearman",
-        use = "complete.obs"
-      )
+    compute_pairwise_correlation(
+      "HD",
+      "PD",
+      results_list,
+      testable_ids
     )
-
   )
 )
+
+rho_hd_pd <- correlation_summary[
+  pair == "HD-PD",
+  spearman_rho
+]
+
+n_hd_pd_pair <- correlation_summary[
+  pair == "HD-PD",
+  n_genes
+]
 
 
 # ==============================================================================
@@ -1381,29 +1723,22 @@ integrate_gsea <- function(
     file_path
   )
 
-
   required <- c(
-
     "dataset",
     "ID",
     "Description",
-
     "NES",
     "p.adjust",
-
     "direction",
     "significant"
   )
-
 
   missing <- setdiff(
     required,
     names(dt)
   )
 
-
   if (length(missing) > 0) {
-
     stop(
       database_name,
       " GSEA: colunas ausentes: ",
@@ -1414,7 +1749,6 @@ integrate_gsea <- function(
     )
   }
 
-
   dt[
     ,
     significant := as_logical_safe(
@@ -1422,15 +1756,12 @@ integrate_gsea <- function(
     )
   ]
 
-
   sig <- dt[
     significant == TRUE &
       dataset %in% datasets
   ]
 
-
   if (nrow(sig) == 0) {
-
     return(
       list(
         long = data.table(),
@@ -1439,11 +1770,9 @@ integrate_gsea <- function(
     )
   }
 
-
   shared_ids <- sig[
     ,
     .(
-
       n_sig_diseases = uniqueN(
         dataset
       ),
@@ -1477,9 +1806,7 @@ integrate_gsea <- function(
     n_sig_diseases >= 2
   ]
 
-
   if (nrow(shared_ids) == 0) {
-
     return(
       list(
         long = data.table(),
@@ -1488,41 +1815,29 @@ integrate_gsea <- function(
     )
   }
 
-
   shared_long <- merge(
-
     sig,
-
     shared_ids[
       ,
       .(
-
         ID,
         Description,
-
         n_sig_diseases,
         datasets_shared,
-
         same_direction,
-
         min_FDR,
         max_abs_NES
       )
     ],
-
     by = c(
       "ID",
       "Description"
     ),
-
     all = FALSE
   )
 
-
   shared_wide <- dcast(
-
     shared_long,
-
     ID +
       Description +
       n_sig_diseases +
@@ -1530,9 +1845,7 @@ integrate_gsea <- function(
       same_direction +
       min_FDR +
       max_abs_NES ~
-
       dataset,
-
     value.var = c(
       "NES",
       "p.adjust",
@@ -1540,14 +1853,12 @@ integrate_gsea <- function(
     )
   )
 
-
   setorder(
     shared_wide,
     -n_sig_diseases,
     min_FDR,
     -max_abs_NES
   )
-
 
   return(
     list(
@@ -1557,12 +1868,10 @@ integrate_gsea <- function(
   )
 }
 
-
 gsea_go <- integrate_gsea(
   gsea_files[["GO_BP"]],
   "GO_BP"
 )
-
 
 gsea_kegg <- integrate_gsea(
   gsea_files[["KEGG"]],
@@ -1583,37 +1892,27 @@ integrate_ora_hd_pd <- function(
     file_path
   )
 
-
   if (nrow(dt) == 0) {
-
     return(
       data.table()
     )
   }
 
-
   required <- c(
-
     "dataset",
     "gene_set",
-
     "ID",
     "Description",
-
     "p.adjust",
-
     "significant"
   )
-
 
   missing <- setdiff(
     required,
     names(dt)
   )
 
-
   if (length(missing) > 0) {
-
     stop(
       database_name,
       " ORA: colunas ausentes: ",
@@ -1624,14 +1923,12 @@ integrate_ora_hd_pd <- function(
     )
   }
 
-
   dt[
     ,
     significant := as_logical_safe(
       significant
     )
   ]
-
 
   sig <- dt[
     significant == TRUE &
@@ -1641,19 +1938,15 @@ integrate_ora_hd_pd <- function(
       )
   ]
 
-
   if (nrow(sig) == 0) {
-
     return(
       data.table()
     )
   }
 
-
   shared <- sig[
     ,
     .(
-
       n_datasets = uniqueN(
         dataset
       ),
@@ -1679,23 +1972,19 @@ integrate_ora_hd_pd <- function(
     n_datasets == 2
   ]
 
-
   setorder(
     shared,
     gene_set,
     best_FDR
   )
 
-
   return(shared)
 }
-
 
 ora_go_shared <- integrate_ora_hd_pd(
   ora_files[["GO_BP"]],
   "GO_BP"
 )
-
 
 ora_kegg_shared <- integrate_ora_hd_pd(
   ora_files[["KEGG"]],
@@ -1704,7 +1993,58 @@ ora_kegg_shared <- integrate_ora_hd_pd(
 
 
 # ==============================================================================
-# 23. SALVAR TABELAS
+# 23. TABELA ÚNICA DAS REGIÕES DOS VENNS
+# ==============================================================================
+
+venn_regions <- rbindlist(
+  list(
+    copy(
+      venn_common_primary$regions
+    )[
+      ,
+      `:=`(
+        venn = "common_primary",
+        definition = "Common testable universe; FDR<0.05; |log2FC|>0.58"
+      )
+    ],
+
+    copy(
+      venn_common_sensitivity$regions
+    )[
+      ,
+      `:=`(
+        venn = "common_sensitivity",
+        definition = "Common testable universe; FDR<0.05; |log2FC|>1"
+      )
+    ],
+
+    copy(
+      venn_article_like$regions
+    )[
+      ,
+      `:=`(
+        venn = "article_like_nominal",
+        definition = "Full DEG lists; p<0.05; |log2FC|>1"
+      )
+    ]
+  ),
+  use.names = TRUE,
+  fill = TRUE
+)
+
+setcolorder(
+  venn_regions,
+  c(
+    "venn",
+    "definition",
+    "pattern",
+    "n_genes"
+  )
+)
+
+
+# ==============================================================================
+# 24. SALVAR TABELAS
 # ==============================================================================
 
 fwrite(
@@ -1718,6 +2058,16 @@ fwrite(
   na = "NA"
 )
 
+fwrite(
+  hd_pd_pairwise,
+  file.path(
+    output_dir,
+    "hd_pd_pairwise_integration.tsv"
+  ),
+  sep = "\t",
+  quote = FALSE,
+  na = "NA"
+)
 
 fwrite(
   primary_pattern_summary,
@@ -1730,7 +2080,6 @@ fwrite(
   na = "NA"
 )
 
-
 fwrite(
   sensitivity_pattern_summary,
   file.path(
@@ -1742,6 +2091,16 @@ fwrite(
   na = "NA"
 )
 
+fwrite(
+  venn_regions,
+  file.path(
+    output_dir,
+    "venn_regions.tsv"
+  ),
+  sep = "\t",
+  quote = FALSE,
+  na = "NA"
+)
 
 fwrite(
   shared_hd_pd,
@@ -1754,7 +2113,6 @@ fwrite(
   na = "NA"
 )
 
-
 fwrite(
   concordant_three,
   file.path(
@@ -1765,7 +2123,6 @@ fwrite(
   quote = FALSE,
   na = "NA"
 )
-
 
 fwrite(
   correlation_summary,
@@ -1778,7 +2135,6 @@ fwrite(
   na = "NA"
 )
 
-
 fwrite(
   gsea_go$wide,
   file.path(
@@ -1789,7 +2145,6 @@ fwrite(
   quote = FALSE,
   na = "NA"
 )
-
 
 fwrite(
   gsea_kegg$wide,
@@ -1802,7 +2157,6 @@ fwrite(
   na = "NA"
 )
 
-
 fwrite(
   ora_go_shared,
   file.path(
@@ -1813,7 +2167,6 @@ fwrite(
   quote = FALSE,
   na = "NA"
 )
-
 
 fwrite(
   ora_kegg_shared,
@@ -1828,13 +2181,45 @@ fwrite(
 
 
 # ==============================================================================
-# 24. GRÁFICO DOS PADRÕES DE DEGs
+# 25. LIMPAR FIGURAS QUE SERÃO RECRIADAS
+# ==============================================================================
+
+plot_files <- c(
+  "primary_deg_patterns.png",
+  "venn_common_primary_AD_HD_PD.png",
+  "venn_common_sensitivity_AD_HD_PD.png",
+  "venn_article_like_nominal_AD_HD_PD.png",
+  "log2FC_HD_vs_PD_pairwise.png",
+  "shared_GSEA_GO_BP.png",
+  "shared_GSEA_KEGG.png"
+)
+
+plot_paths <- file.path(
+  plot_dir,
+  plot_files
+)
+
+existing_plots <- plot_paths[
+  file.exists(
+    plot_paths
+  )
+]
+
+if (length(existing_plots) > 0) {
+  unlink(
+    existing_plots,
+    force = TRUE
+  )
+}
+
+
+# ==============================================================================
+# 26. GRÁFICO DOS PADRÕES DE DEGs — UNIVERSO COMUM
 # ==============================================================================
 
 primary_plot_dt <- primary_pattern_summary[
   primary_pattern != "None"
 ]
-
 
 primary_plot_dt[
   ,
@@ -1846,17 +2231,13 @@ primary_plot_dt[
   )
 ]
 
-
 p_primary <- ggplot(
-
   primary_plot_dt,
-
   aes(
     x = primary_pattern,
     y = n_genes,
     fill = primary_pattern
   )
-
 ) +
 
   geom_col(
@@ -1877,20 +2258,16 @@ p_primary <- ggplot(
   ) +
 
   labs(
-
     title = "Distribuição dos DEGs entre AD, HD e PD",
-
     subtitle = paste0(
-      "Critério principal; universo comum testável = ",
+      "Critério principal; universo comum testável AD∩HD∩PD = ",
       format(
         length(common_universe),
         big.mark = "."
       ),
       " genes"
     ),
-
     x = NULL,
-
     y = "Número de genes"
   ) +
 
@@ -1899,7 +2276,6 @@ p_primary <- ggplot(
   ) +
 
   theme(
-
     legend.position = "none",
 
     axis.text.x = element_text(
@@ -1911,7 +2287,6 @@ p_primary <- ggplot(
       face = "bold"
     )
   )
-
 
 ggsave(
   file.path(
@@ -1927,42 +2302,30 @@ ggsave(
 
 
 # ==============================================================================
-# 25. VENN - CRITÉRIO PRINCIPAL
-#
-# FDR < 0.05 e |log2FC| > 0.58
+# 27. VENN — UNIVERSO COMUM / CRITÉRIO PRINCIPAL
 # ==============================================================================
 
-p_venn_primary <- create_venn_plot(
+p_venn_common_primary <- create_venn_plot(
+  venn_result = venn_common_primary,
 
-  pattern_dt = primary_pattern_summary,
-
-  pattern_column = "primary_pattern",
-
-  title = "Interseção dos DEGs entre AD, HD e PD",
+  title = "Interseção dos DEGs no universo comum testável",
 
   subtitle = paste0(
-
-    "FDR < 0,05 e |log2FC| > 0,58; universo comum testável = ",
-
+    "FDR < 0,05 e |log2FC| > 0,58; AD∩HD∩PD = ",
     format(
       length(common_universe),
       big.mark = "."
     ),
-
     " genes"
   )
 )
 
-
 ggsave(
-
   file.path(
     plot_dir,
-    "venn_primary_AD_HD_PD.png"
+    "venn_common_primary_AD_HD_PD.png"
   ),
-
-  p_venn_primary,
-
+  p_venn_common_primary,
   width = 10,
   height = 8,
   dpi = 300,
@@ -1971,42 +2334,30 @@ ggsave(
 
 
 # ==============================================================================
-# 26. VENN - ANÁLISE DE SENSIBILIDADE
-#
-# FDR < 0.05 e |log2FC| > 1
+# 28. VENN — UNIVERSO COMUM / SENSIBILIDADE
 # ==============================================================================
 
-p_venn_sensitivity <- create_venn_plot(
+p_venn_common_sensitivity <- create_venn_plot(
+  venn_result = venn_common_sensitivity,
 
-  pattern_dt = sensitivity_pattern_summary,
-
-  pattern_column = "sensitivity_pattern",
-
-  title = "Interseção dos DEGs — análise de sensibilidade",
+  title = "Interseção dos DEGs no universo comum — sensibilidade",
 
   subtitle = paste0(
-
-    "FDR < 0,05 e |log2FC| > 1; universo comum testável = ",
-
+    "FDR < 0,05 e |log2FC| > 1; AD∩HD∩PD = ",
     format(
       length(common_universe),
       big.mark = "."
     ),
-
     " genes"
   )
 )
 
-
 ggsave(
-
   file.path(
     plot_dir,
-    "venn_sensitivity_AD_HD_PD.png"
+    "venn_common_sensitivity_AD_HD_PD.png"
   ),
-
-  p_venn_sensitivity,
-
+  p_venn_common_sensitivity,
   width = 10,
   height = 8,
   dpi = 300,
@@ -2015,62 +2366,86 @@ ggsave(
 
 
 # ==============================================================================
-# 27. SCATTER HD vs PD
+# 29. VENN — COMPARAÇÃO NOMINAL "ARTICLE-LIKE"
+# ==============================================================================
+
+article_totals <- setNames(
+  venn_article_like$totals$n_genes,
+  venn_article_like$totals$dataset
+)
+
+p_venn_article_like <- create_venn_plot(
+  venn_result = venn_article_like,
+
+  title = "Interseção dos genes — critério comparativo nominal",
+
+  subtitle = paste0(
+    "p < 0,05 e |log2FC| > 1; listas completas: AD = ",
+    article_totals[["AD"]],
+    ", HD = ",
+    format(
+      article_totals[["HD"]],
+      big.mark = "."
+    ),
+    ", PD = ",
+    format(
+      article_totals[["PD"]],
+      big.mark = "."
+    )
+  )
+)
+
+ggsave(
+  file.path(
+    plot_dir,
+    "venn_article_like_nominal_AD_HD_PD.png"
+  ),
+  p_venn_article_like,
+  width = 10,
+  height = 8,
+  dpi = 300,
+  bg = "white"
+)
+
+
+# ==============================================================================
+# 30. SCATTER — CONCORDÂNCIA DOS EFEITOS HD vs PD
+#
+# Agora usa o universo pareado HD∩PD.
 # ==============================================================================
 
 scatter_dt <- copy(
-  integrated
+  hd_pd_pairwise
 )
-
 
 scatter_dt[
   ,
-  scatter_class := fcase(
-
-    DEG_HD &
-      DEG_PD,
-
-    "HD+PD",
-
-
-    DEG_HD,
-
-    "HD",
-
-
-    DEG_PD,
-
-    "PD",
-
-
-    default = "Other"
+  primary_class := factor(
+    primary_class,
+    levels = c(
+      "Not_DEG",
+      "HD_only",
+      "PD_only",
+      "HD+PD"
+    )
   )
 ]
 
-
-scatter_colors <- c(
-
-  "Other" = "#D0D0D0",
-
-  "HD" = "#277DA1",
-
-  "PD" = "#E75480",
-
-  "HD+PD" = "#DF9203"
-)
-
-
 p_hd_pd <- ggplot(
-
   scatter_dt,
-
   aes(
     x = log2FoldChange_HD,
-    y = log2FoldChange_PD,
-    color = scatter_class
+    y = log2FoldChange_PD
   )
-
 ) +
+
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linetype = "solid",
+    linewidth = 0.45,
+    color = "#7A7A7A"
+  ) +
 
   geom_hline(
     yintercept = 0,
@@ -2085,31 +2460,50 @@ p_hd_pd <- ggplot(
   ) +
 
   geom_point(
-    alpha = 0.55,
-    size = 1.3
+    aes(
+      color = primary_class,
+      alpha = primary_class
+    ),
+    size = 1.35
   ) +
 
   scale_color_manual(
-    values = scatter_colors
+    values = scatter_colors,
+    labels = c(
+      "Not_DEG" = "Not_DEG",
+      "HD_only" = "HD",
+      "PD_only" = "PD",
+      "HD+PD" = "HD+PD"
+    )
+  ) +
+
+  scale_alpha_manual(
+    values = scatter_alpha,
+    guide = "none"
   ) +
 
   labs(
-
-    title = "Concordância de efeito - HD vs PD",
+    title = "Concordância de efeito — HD vs PD",
 
     subtitle = paste0(
-      "Universo comum testável = ",
+      "Universo pareado HD∩PD = ",
       format(
-        length(common_universe),
+        n_hd_pd_pair,
         big.mark = "."
       ),
-      " genes"
+      " genes; Spearman ρ = ",
+      sprintf(
+        "%.3f",
+        rho_hd_pd
+      ),
+      "; DEGs compartilhados = ",
+      nrow(
+        shared_hd_pd
+      )
     ),
 
-    x = "log2FoldChange - HD",
-
-    y = "log2FoldChange - PD",
-
+    x = "log2FoldChange — HD",
+    y = "log2FoldChange — PD",
     color = "Classificação"
   ) +
 
@@ -2123,25 +2517,21 @@ p_hd_pd <- ggplot(
     )
   )
 
-
 ggsave(
-
   file.path(
     plot_dir,
-    "log2FC_HD_vs_PD.png"
+    "log2FC_HD_vs_PD_pairwise.png"
   ),
-
   p_hd_pd,
-
-  width = 8,
-  height = 6.5,
+  width = 8.5,
+  height = 6.8,
   dpi = 300,
   bg = "white"
 )
 
 
 # ==============================================================================
-# 28. HEATMAP DE NES DOS TERMOS GSEA COMPARTILHADOS
+# 31. HEATMAP DE NES DOS TERMOS GSEA COMPARTILHADOS
 # ==============================================================================
 
 plot_shared_gsea <- function(
@@ -2151,38 +2541,28 @@ plot_shared_gsea <- function(
 ) {
 
   if (nrow(gsea_result$long) == 0) {
-
     message(
       database_name,
-      ": nenhum termo GSEA significativo ",
-      "em pelo menos duas doenças."
+      ": nenhum termo GSEA significativo em pelo menos duas doenças."
     )
-
 
     return(
       invisible(NULL)
     )
   }
 
-
   ranking <- unique(
-
     gsea_result$long[
       ,
       .(
-
         ID,
         Description,
-
         n_sig_diseases,
-
         min_FDR,
-
         max_abs_NES
       )
     ]
   )
-
 
   setorder(
     ranking,
@@ -2191,31 +2571,25 @@ plot_shared_gsea <- function(
     -max_abs_NES
   )
 
-
   ranking <- head(
     ranking,
     top_n
   )
-
 
   ranking[
     ,
     plot_label := Description
   ]
 
-
   duplicated_labels <- (
-
     duplicated(
       ranking$plot_label
     ) |
-
       duplicated(
         ranking$plot_label,
         fromLast = TRUE
       )
   )
-
 
   ranking[
     duplicated_labels,
@@ -2227,11 +2601,8 @@ plot_shared_gsea <- function(
     )
   ]
 
-
   plot_dt <- merge(
-
     gsea_result$long,
-
     ranking[
       ,
       .(
@@ -2239,12 +2610,9 @@ plot_shared_gsea <- function(
         plot_label
       )
     ],
-
     by = "ID",
-
     all = FALSE
   )
-
 
   plot_dt[
     ,
@@ -2256,17 +2624,13 @@ plot_shared_gsea <- function(
     )
   ]
 
-
   p <- ggplot(
-
     plot_dt,
-
     aes(
       x = dataset,
       y = plot_label,
       fill = NES
     )
-
   ) +
 
     geom_tile(
@@ -2285,35 +2649,25 @@ plot_shared_gsea <- function(
     ) +
 
     scale_fill_gradient2(
-
       low = "#2166AC",
-
       mid = "white",
-
       high = "#B2182B",
-
       midpoint = 0,
-
       na.value = "grey95"
     ) +
 
     labs(
-
       title = paste0(
-        "GSEA compartilhado - ",
+        "GSEA compartilhado — ",
         database_name
       ),
-
       subtitle = paste0(
         "Termos significativos (BH-FDR < ",
         alpha,
         ") em pelo menos duas doenças"
       ),
-
       x = NULL,
-
       y = NULL,
-
       fill = "NES"
     ) +
 
@@ -2322,7 +2676,6 @@ plot_shared_gsea <- function(
     ) +
 
     theme(
-
       plot.title = element_text(
         face = "bold"
       ),
@@ -2332,9 +2685,7 @@ plot_shared_gsea <- function(
       )
     )
 
-
   ggsave(
-
     file.path(
       plot_dir,
       paste0(
@@ -2343,33 +2694,25 @@ plot_shared_gsea <- function(
         ".png"
       )
     ),
-
     p,
-
     width = 9,
-
     height = max(
       6,
       0.32 *
         nrow(ranking) +
         2
     ),
-
     dpi = 300,
-
     bg = "white"
   )
 
-
   invisible(NULL)
 }
-
 
 plot_shared_gsea(
   gsea_go,
   "GO_BP"
 )
-
 
 plot_shared_gsea(
   gsea_kegg,
@@ -2378,7 +2721,7 @@ plot_shared_gsea(
 
 
 # ==============================================================================
-# 29. FUNÇÕES DO RESUMO GSEA
+# 32. FUNÇÕES DO RESUMO GSEA
 # ==============================================================================
 
 count_gsea_all3 <- function(
@@ -2386,78 +2729,87 @@ count_gsea_all3 <- function(
 ) {
 
   if (nrow(gsea_result$wide) == 0) {
-
     return(0L)
   }
-
 
   sum(
     gsea_result$wide$n_sig_diseases == 3
   )
 }
 
-
 count_gsea_all3_same_direction <- function(
   gsea_result
 ) {
 
   if (nrow(gsea_result$wide) == 0) {
-
     return(0L)
   }
 
-
   sum(
-
     gsea_result$wide$n_sig_diseases == 3 &
-
       gsea_result$wide$same_direction == TRUE
   )
 }
 
 
 # ==============================================================================
-# 30. RESUMO FINAL DA INTEGRAÇÃO
+# 33. RESUMO FINAL DA INTEGRAÇÃO
 # ==============================================================================
 
+get_venn_region <- function(
+  venn_result,
+  pattern_name
+) {
+
+  value <- venn_result$regions[
+    pattern == pattern_name,
+    n_genes
+  ]
+
+  if (length(value) == 0) {
+    return(0L)
+  }
+
+  as.integer(
+    value[1]
+  )
+}
+
 integration_summary <- data.table(
-
   metric = c(
-
     "common_testable_universe",
+    "hd_pd_pairwise_universe",
 
-    "primary_AD",
-    "primary_HD",
-    "primary_PD",
+    "common_primary_AD",
+    "common_primary_HD",
+    "common_primary_PD",
 
-    "primary_AD_only",
-    "primary_HD_only",
-    "primary_PD_only",
+    "common_primary_AD_only",
+    "common_primary_HD_only",
+    "common_primary_PD_only",
+    "common_primary_AD_HD",
+    "common_primary_AD_PD",
+    "common_primary_HD_PD",
+    "common_primary_AD_HD_PD",
 
-    "primary_AD_HD",
-    "primary_AD_PD",
-    "primary_HD_PD",
+    "common_sensitivity_AD",
+    "common_sensitivity_HD",
+    "common_sensitivity_PD",
+    "common_sensitivity_HD_PD",
 
-    "primary_AD_HD_PD",
+    "article_like_AD",
+    "article_like_HD",
+    "article_like_PD",
+    "article_like_AD_HD",
+    "article_like_AD_PD",
+    "article_like_HD_PD",
+    "article_like_AD_HD_PD",
 
-    "shared_HD_PD_same_direction",
-    "shared_HD_PD_opposite_direction",
+    "pairwise_HD_PD_shared_primary",
+    "pairwise_HD_PD_shared_same_direction",
+    "pairwise_HD_PD_shared_opposite_direction",
 
     "directionally_concordant_all_three",
-
-    "sensitivity_AD",
-    "sensitivity_HD",
-    "sensitivity_PD",
-
-    "sensitivity_AD_only",
-    "sensitivity_HD_only",
-    "sensitivity_PD_only",
-
-    "sensitivity_AD_HD",
-    "sensitivity_AD_PD",
-    "sensitivity_HD_PD",
-
-    "sensitivity_AD_HD_PD",
 
     "shared_GSEA_GO_BP_at_least_2",
     "shared_GSEA_GO_BP_all_3",
@@ -2471,67 +2823,123 @@ integration_summary <- data.table(
     "shared_ORA_HD_PD_KEGG"
   ),
 
-
   value = c(
-
     length(
       common_universe
     ),
 
-
-    sum(
-      integrated$DEG_AD,
-      na.rm = TRUE
+    length(
+      hd_pd_universe
     ),
 
-    sum(
-      integrated$DEG_HD,
-      na.rm = TRUE
+    venn_common_primary$totals[
+      dataset == "AD",
+      n_genes
+    ],
+
+    venn_common_primary$totals[
+      dataset == "HD",
+      n_genes
+    ],
+
+    venn_common_primary$totals[
+      dataset == "PD",
+      n_genes
+    ],
+
+    get_venn_region(
+      venn_common_primary,
+      "AD only"
     ),
 
-    sum(
-      integrated$DEG_PD,
-      na.rm = TRUE
+    get_venn_region(
+      venn_common_primary,
+      "HD only"
     ),
 
-
-    sum(
-      integrated$primary_pattern ==
-        "AD only"
+    get_venn_region(
+      venn_common_primary,
+      "PD only"
     ),
 
-    sum(
-      integrated$primary_pattern ==
-        "HD only"
+    get_venn_region(
+      venn_common_primary,
+      "AD+HD"
     ),
 
-    sum(
-      integrated$primary_pattern ==
-        "PD only"
+    get_venn_region(
+      venn_common_primary,
+      "AD+PD"
     ),
 
-
-    sum(
-      integrated$primary_pattern ==
-        "AD+HD"
+    get_venn_region(
+      venn_common_primary,
+      "HD+PD"
     ),
 
-    sum(
-      integrated$primary_pattern ==
-        "AD+PD"
+    get_venn_region(
+      venn_common_primary,
+      "AD+HD+PD"
     ),
 
-    sum(
-      integrated$primary_pattern ==
-        "HD+PD"
+    venn_common_sensitivity$totals[
+      dataset == "AD",
+      n_genes
+    ],
+
+    venn_common_sensitivity$totals[
+      dataset == "HD",
+      n_genes
+    ],
+
+    venn_common_sensitivity$totals[
+      dataset == "PD",
+      n_genes
+    ],
+
+    get_venn_region(
+      venn_common_sensitivity,
+      "HD+PD"
     ),
 
+    venn_article_like$totals[
+      dataset == "AD",
+      n_genes
+    ],
 
-    sum(
-      integrated$primary_pattern ==
-        "AD+HD+PD"
+    venn_article_like$totals[
+      dataset == "HD",
+      n_genes
+    ],
+
+    venn_article_like$totals[
+      dataset == "PD",
+      n_genes
+    ],
+
+    get_venn_region(
+      venn_article_like,
+      "AD+HD"
     ),
 
+    get_venn_region(
+      venn_article_like,
+      "AD+PD"
+    ),
+
+    get_venn_region(
+      venn_article_like,
+      "HD+PD"
+    ),
+
+    get_venn_region(
+      venn_article_like,
+      "AD+HD+PD"
+    ),
+
+    nrow(
+      shared_hd_pd
+    ),
 
     nrow(
       shared_hd_pd_same_direction
@@ -2541,65 +2949,9 @@ integration_summary <- data.table(
       shared_hd_pd_opposite_direction
     ),
 
-
     nrow(
       concordant_three
     ),
-
-
-    sum(
-      integrated$DEG_sensitivity_AD,
-      na.rm = TRUE
-    ),
-
-    sum(
-      integrated$DEG_sensitivity_HD,
-      na.rm = TRUE
-    ),
-
-    sum(
-      integrated$DEG_sensitivity_PD,
-      na.rm = TRUE
-    ),
-
-
-    sum(
-      integrated$sensitivity_pattern ==
-        "AD only"
-    ),
-
-    sum(
-      integrated$sensitivity_pattern ==
-        "HD only"
-    ),
-
-    sum(
-      integrated$sensitivity_pattern ==
-        "PD only"
-    ),
-
-
-    sum(
-      integrated$sensitivity_pattern ==
-        "AD+HD"
-    ),
-
-    sum(
-      integrated$sensitivity_pattern ==
-        "AD+PD"
-    ),
-
-    sum(
-      integrated$sensitivity_pattern ==
-        "HD+PD"
-    ),
-
-
-    sum(
-      integrated$sensitivity_pattern ==
-        "AD+HD+PD"
-    ),
-
 
     nrow(
       gsea_go$wide
@@ -2613,7 +2965,6 @@ integration_summary <- data.table(
       gsea_go
     ),
 
-
     nrow(
       gsea_kegg$wide
     ),
@@ -2626,7 +2977,6 @@ integration_summary <- data.table(
       gsea_kegg
     ),
 
-
     nrow(
       ora_go_shared
     ),
@@ -2637,75 +2987,94 @@ integration_summary <- data.table(
   )
 )
 
-
 fwrite(
-
   integration_summary,
-
   file.path(
     output_dir,
     "integration_summary.tsv"
   ),
-
   sep = "\t",
-
   quote = FALSE,
-
   na = "NA"
 )
 
 
 # ==============================================================================
-# 31. RESUMO NO TERMINAL
+# 34. RESUMO NO TERMINAL
 # ==============================================================================
 
 cat("\n")
 cat("============================================================\n")
-cat("RESUMO FINAL - INTEGRAÇÃO TRANSDIAGNÓSTICA\n")
+cat("RESUMO FINAL — INTEGRAÇÃO TRANSDIAGNÓSTICA\n")
 cat("============================================================\n")
-
 
 print(
   integration_summary
 )
 
-
 cat("\n")
-cat("Correlações de Spearman dos log2FC:\n")
-
+cat("Correlações de Spearman — universos pareados:\n")
 
 print(
   correlation_summary
 )
 
+cat("\n")
+cat("HD vs PD — universo pareado:\n")
+
+cat(
+  "Genes: ",
+  n_hd_pd_pair,
+  "\n",
+  sep = ""
+)
+
+cat(
+  "Spearman rho: ",
+  sprintf(
+    "%.6f",
+    rho_hd_pd
+  ),
+  "\n",
+  sep = ""
+)
+
+cat(
+  "DEGs compartilhados: ",
+  nrow(
+    shared_hd_pd
+  ),
+  "\n",
+  sep = ""
+)
+
+cat(
+  "Mesma direção: ",
+  nrow(
+    shared_hd_pd_same_direction
+  ),
+  "\n",
+  sep = ""
+)
+
+cat(
+  "Direção oposta: ",
+  nrow(
+    shared_hd_pd_opposite_direction
+  ),
+  "\n",
+  sep = ""
+)
 
 cat("\n")
 cat("Figuras geradas:\n")
-
-cat(
-  " - primary_deg_patterns.png\n"
-)
-
-cat(
-  " - venn_primary_AD_HD_PD.png\n"
-)
-
-cat(
-  " - venn_sensitivity_AD_HD_PD.png\n"
-)
-
-cat(
-  " - log2FC_HD_vs_PD.png\n"
-)
-
-cat(
-  " - shared_GSEA_GO_BP.png\n"
-)
-
-cat(
-  " - shared_GSEA_KEGG.png\n"
-)
-
+cat(" - primary_deg_patterns.png\n")
+cat(" - venn_common_primary_AD_HD_PD.png\n")
+cat(" - venn_common_sensitivity_AD_HD_PD.png\n")
+cat(" - venn_article_like_nominal_AD_HD_PD.png\n")
+cat(" - log2FC_HD_vs_PD_pairwise.png\n")
+cat(" - shared_GSEA_GO_BP.png\n")
+cat(" - shared_GSEA_KEGG.png\n")
 
 cat("\n")
 cat("============================================================\n")

@@ -2,62 +2,22 @@
 
 # ==============================================================================
 # 03_harmonize_genes.R
-#
-# Objetivo:
-#   Harmonizar a identidade gênica entre AD, HD e PD utilizando NCBI GeneID
-#   como chave primária.
-#
-# Entradas:
-#   results/counts/counts_AD.tsv
-#   results/counts/counts_HD.tsv
-#   results/counts/counts_PD.tsv
-#   data/raw/Human.GRCh38.p13.annot.tsv.gz
+# Objetivo: Harmonizar a identidade gênica entre AD, HD e PD utilizando NCBI GeneID como chave primária.
 #
 # Este script:
-#   1. lê os GeneIDs das três matrizes preparadas;
-#   2. lê a anotação GRCh38.p13;
-#   3. constrói a união de todos os GeneIDs;
-#   4. classifica presença/ausência em AD, HD e PD;
-#   5. incorpora Symbol, EnsemblGeneID e GeneType;
-#   6. preserva, quando necessário, o GeneSymbol original de AD;
-#   7. identifica genes comuns e específicos;
-#   8. audita genes sem anotação;
-#   9. cria uma tabela mestre de identidade gênica.
+#   1. lê os GeneIDs das três matrizes preparadas e a anotação GRCh38.p13, construindo a união de todos os GeneIDs;
+#   2. classifica presença/ausência em AD, HD e PD;
+#   3. incorpora Symbol, EnsemblGeneID e GeneType e preserva, quando necessário, o GeneSymbol original de AD;
+#   4. identifica genes comuns e específicos, audita genes sem anotação e cria uma tabela mestre de identidade gênica.
 #
-# IMPORTANTE:
-#   - Nenhum gene é removido das matrizes de contagens.
-#   - Nenhuma matriz é equalizada nesta etapa.
-#   - Nenhum filtro de expressão é aplicado.
-#   - Nenhuma normalização é realizada.
-#   - GeneID permanece a chave primária.
-#   - Symbol e EnsemblGeneID são anotações, não chaves primárias.
+# gene_master.tsv: tabela mestre para uso nas etapas posteriores.
 #
-# Saídas:
-#   results/harmonization/gene_master.tsv
-#   results/harmonization/gene_presence_audit.tsv
-#
-# gene_master.tsv:
-#   tabela mestre para uso nas etapas posteriores.
-#
-# gene_presence_audit.tsv:
-#   genes que NÃO estão simultaneamente presentes nos três datasets,
-#   permitindo auditar explicitamente o que ficaria fora de uma futura
-#   interseção.
-# ==============================================================================
-
-
-# ==============================================================================
-# 1. PACOTES
+# gene_presence_audit.tsv: genes que NÃO estão simultaneamente presentes nos três datasets, permitindo auditar explicitamente o que ficaria fora de uma futura interseção.
 # ==============================================================================
 
 suppressPackageStartupMessages({
   library(data.table)
 })
-
-
-# ==============================================================================
-# 2. CAMINHOS
-# ==============================================================================
 
 ad_counts_file <- "results/counts/counts_AD.tsv"
 hd_counts_file <- "results/counts/counts_HD.tsv"
@@ -76,10 +36,8 @@ dir.create(
   showWarnings = FALSE
 )
 
-
 # ==============================================================================
-# 3. VERIFICAR ENTRADAS
-# ==============================================================================
+# VERIFICAR ENTRADAS
 
 input_files <- c(
   ad_counts_file,
@@ -108,15 +66,10 @@ if (length(missing_files) > 0) {
 
 
 # ==============================================================================
-# 4. FUNÇÕES AUXILIARES
-# ==============================================================================
+# FUNÇÕES AUXILIARES
 
-# ------------------------------------------------------------------------------
 # Padronizar GeneID como character
-# ------------------------------------------------------------------------------
-
 standardize_gene_id <- function(x) {
-
   x <- as.character(x)
   x <- trimws(x)
 
@@ -129,17 +82,12 @@ standardize_gene_id <- function(x) {
         "nan"
       )
   ] <- NA_character_
-
   x
 }
 
 
-# ------------------------------------------------------------------------------
 # Padronizar campos de anotação
-# ------------------------------------------------------------------------------
-
 clean_annotation_field <- function(x) {
-
   x <- as.character(x)
   x <- trimws(x)
 
@@ -154,22 +102,16 @@ clean_annotation_field <- function(x) {
         "null"
       )
   ] <- NA_character_
-
   x
 }
 
-
-# ------------------------------------------------------------------------------
 # Validar conjunto de GeneIDs
-# ------------------------------------------------------------------------------
-
 validate_gene_ids <- function(
   gene_ids,
   dataset_name
 ) {
 
   if (anyNA(gene_ids)) {
-
     stop(
       dataset_name,
       ": existem GeneIDs ausentes."
@@ -177,7 +119,6 @@ validate_gene_ids <- function(
   }
 
   if (anyDuplicated(gene_ids)) {
-
     stop(
       dataset_name,
       ": existem GeneIDs duplicados."
@@ -188,18 +129,13 @@ validate_gene_ids <- function(
 }
 
 
-# ==============================================================================
-# 5. LER GeneIDs DAS MATRIZES PREPARADAS
-# ==============================================================================
 
+# LER GeneIDs DAS MATRIZES PREPARADAS
 cat("\n")
 cat("============================================\n")
 cat("LEITURA DOS GeneIDs\n")
 cat("============================================\n")
 
-
-# Lemos somente GeneID.
-# As contagens não precisam ser carregadas nesta etapa.
 
 ad_genes <- fread(
   ad_counts_file,
@@ -266,7 +202,6 @@ cat(
 
 
 # Valores esperados a partir das etapas 00 e 02.
-
 if (length(ad_ids) != 19185) {
   stop(
     "AD: esperados 19185 GeneIDs; encontrados ",
@@ -293,14 +228,12 @@ if (length(pd_ids) != 39376) {
 
 
 # ==============================================================================
-# 6. AUDITAR RELAÇÃO HD / PD
+# AUDITAR RELAÇÃO HD / PD
 # ==============================================================================
-
 cat("\n")
 cat("============================================\n")
 cat("COMPARAÇÃO DOS UNIVERSOS HD / PD\n")
 cat("============================================\n")
-
 
 hd_only <- setdiff(
   hd_ids,
@@ -330,11 +263,7 @@ if (
   length(hd_only) == 0 &&
     length(pd_only) == 0
 ) {
-
-  cat(
-    "HD e PD possuem o mesmo conjunto de GeneIDs.\n"
-  )
-
+  cat("HD e PD possuem o mesmo conjunto de GeneIDs.\n")
 } else {
 
   warning(
@@ -342,16 +271,13 @@ if (
   )
 }
 
-
 # ==============================================================================
-# 7. CONSTRUIR UNIVERSO GÊNICO
-# ==============================================================================
+# CONSTRUIR UNIVERSO GÊNICO
 
 cat("\n")
 cat("============================================\n")
 cat("CONSTRUÇÃO DO UNIVERSO GÊNICO\n")
 cat("============================================\n")
-
 
 all_gene_ids <- sort(
   unique(
@@ -363,11 +289,9 @@ all_gene_ids <- sort(
   )
 )
 
-
 gene_presence <- data.table(
   gene_id = all_gene_ids
 )
-
 
 gene_presence[
   ,
@@ -384,11 +308,8 @@ gene_presence[
   in_PD := gene_id %in% pd_ids
 ]
 
-
 # ------------------------------------------------------------------------------
 # Número de datasets em que cada gene aparece
-# ------------------------------------------------------------------------------
-
 gene_presence[
   ,
   n_datasets := (
@@ -399,49 +320,33 @@ gene_presence[
 ]
 
 
-# ------------------------------------------------------------------------------
 # Classe explícita de presença
-# ------------------------------------------------------------------------------
-
 gene_presence[
   ,
   presence_class := fcase(
-
     in_AD & in_HD & in_PD,
     "AD_HD_PD",
-
     in_AD & in_HD & !in_PD,
     "AD_HD",
-
     in_AD & !in_HD & in_PD,
     "AD_PD",
-
     !in_AD & in_HD & in_PD,
     "HD_PD",
-
     in_AD & !in_HD & !in_PD,
     "AD_only",
-
     !in_AD & in_HD & !in_PD,
     "HD_only",
-
     !in_AD & !in_HD & in_PD,
     "PD_only",
-
     default = "unexpected"
   )
 ]
 
-
-# ==============================================================================
-# 8. RESUMO DE PRESENÇA / AUSÊNCIA
-# ==============================================================================
-
+# RESUMO DE PRESENÇA / AUSÊNCIA
 cat("\n")
 cat("============================================\n")
 cat("PRESENÇA DOS GENES ENTRE DATASETS\n")
 cat("============================================\n")
-
 
 cat(
   "União AD ∪ HD ∪ PD:",
@@ -506,11 +411,8 @@ cat(
 )
 
 
-# Valores já observados no 00.
-# Aqui funcionam como validação de continuidade do pipeline.
-
+# Valores já observados no 00. Aqui funcionam como validação de continuidade do pipeline.
 if (nrow(gene_presence) != 39620) {
-
   stop(
     "União esperada = 39620; encontrada = ",
     nrow(gene_presence),
@@ -530,7 +432,6 @@ if (
   )
 }
 
-
 if (
   sum(
     gene_presence$presence_class == "AD_only"
@@ -542,34 +443,27 @@ if (
   )
 }
 
-
 if (
   sum(
     gene_presence$presence_class == "HD_PD"
   ) != 20435
 ) {
-
   stop(
     "Esperados 20435 GeneIDs presentes em HD/PD e ausentes em AD."
   )
 }
 
 
-# ==============================================================================
-# 9. LER ANOTAÇÃO GRCh38.p13
-# ==============================================================================
-
+# LER ANOTAÇÃO GRCh38.p13
 cat("\n")
 cat("============================================\n")
 cat("LEITURA DA ANOTAÇÃO GRCh38.p13\n")
 cat("============================================\n")
 
-
 annotation <- fread(
   annotation_file,
   check.names = FALSE
 )
-
 
 required_annotation_columns <- c(
   "GeneID",
@@ -578,15 +472,12 @@ required_annotation_columns <- c(
   "EnsemblGeneID"
 )
 
-
 missing_annotation_columns <- setdiff(
   required_annotation_columns,
   names(annotation)
 )
 
-
 if (length(missing_annotation_columns) > 0) {
-
   stop(
     paste0(
       "Colunas ausentes na anotação: ",
@@ -622,7 +513,6 @@ annotation <- annotation[
 
 
 if (anyNA(annotation$gene_id)) {
-
   stop(
     "Existem GeneIDs ausentes na anotação."
   )
@@ -630,12 +520,10 @@ if (anyNA(annotation$gene_id)) {
 
 
 if (anyDuplicated(annotation$gene_id)) {
-
   stop(
     "Existem GeneIDs duplicados na anotação."
   )
 }
-
 
 cat(
   "Genes na anotação:",
@@ -673,16 +561,11 @@ cat(
   "\n"
 )
 
-
-# ==============================================================================
-# 10. RECUPERAR GeneSymbol ORIGINAL DE AD
-# ==============================================================================
-
+# RECUPERAR GeneSymbol ORIGINAL DE AD
 cat("\n")
 cat("============================================\n")
 cat("RECUPERAÇÃO DO GeneSymbol ORIGINAL DE AD\n")
 cat("============================================\n")
-
 
 ad_original_annotation <- fread(
   ad_original_file,
@@ -692,7 +575,6 @@ ad_original_annotation <- fread(
   ),
   check.names = FALSE
 )
-
 
 ad_original_annotation <- ad_original_annotation[
   ,
@@ -709,7 +591,6 @@ ad_original_annotation <- ad_original_annotation[
 
 
 if (anyNA(ad_original_annotation$gene_id)) {
-
   stop(
     "AD original: existem GeneIDs ausentes."
   )
@@ -717,7 +598,6 @@ if (anyNA(ad_original_annotation$gene_id)) {
 
 
 if (anyDuplicated(ad_original_annotation$gene_id)) {
-
   stop(
     "AD original: existem GeneIDs duplicados."
   )
@@ -725,12 +605,10 @@ if (anyDuplicated(ad_original_annotation$gene_id)) {
 
 
 if (nrow(ad_original_annotation) != 19185) {
-
   stop(
     "AD original deveria possuir 19185 genes."
   )
 }
-
 
 cat(
   "GeneSymbols AD disponíveis:",
@@ -744,16 +622,11 @@ cat(
   "\n"
 )
 
-
 # ==============================================================================
-# 11. CONSTRUIR TABELA MESTRE
-# ==============================================================================
-
 cat("\n")
 cat("============================================\n")
 cat("CONSTRUÇÃO DA TABELA MESTRE\n")
 cat("============================================\n")
-
 
 gene_master <- merge(
   gene_presence,
@@ -762,7 +635,6 @@ gene_master <- merge(
   all.x = TRUE,
   sort = FALSE
 )
-
 
 gene_master <- merge(
   gene_master,
@@ -775,16 +647,8 @@ gene_master <- merge(
 
 # ------------------------------------------------------------------------------
 # Symbol final
-#
-# Prioridade:
-#   1. Symbol da anotação GRCh38.p13
-#   2. GeneSymbol original de AD
-#
-# Isso permite preservar uma nomenclatura para parte dos genes AD-only
-# que não existem na anotação GRCh38.p13 utilizada para HD/PD.
-#
-# A origem do símbolo permanece explicitamente registrada.
-# ------------------------------------------------------------------------------
+# A prioridade é o Symbol da anotação GRCh38.p13 e GeneSymbol original de AD
+# Isso permite preservar uma nomenclatura para parte dos genes AD-only que não existem na anotação GRCh38.p13 utilizada para HD/PD.
 
 gene_master[
   ,
@@ -810,10 +674,8 @@ gene_master[
   )
 ]
 
-
 # ------------------------------------------------------------------------------
 # Cobertura da anotação
-# ------------------------------------------------------------------------------
 
 gene_master[
   ,
@@ -822,10 +684,8 @@ gene_master[
     !is.na(gene_type)
 ]
 
-
 # ------------------------------------------------------------------------------
 # Ordenação das colunas
-# ------------------------------------------------------------------------------
 
 setcolorder(
   gene_master,
@@ -848,7 +708,6 @@ setcolorder(
 
 
 # Ordenação determinística por GeneID numérico quando possível.
-
 gene_master[
   ,
   gene_id_numeric__ := suppressWarnings(
@@ -869,8 +728,7 @@ gene_master[
 
 
 # ==============================================================================
-# 12. AUDITORIA DA ANOTAÇÃO
-# ==============================================================================
+# AUDITORIA DA ANOTAÇÃO
 
 cat("\n")
 cat("============================================\n")
@@ -925,12 +783,10 @@ cat(
 
 # ------------------------------------------------------------------------------
 # Auditoria específica dos 244 genes AD-only
-# ------------------------------------------------------------------------------
 
 ad_only_table <- gene_master[
   presence_class == "AD_only"
 ]
-
 
 cat("\nAD-only:\n")
 
@@ -983,12 +839,9 @@ cat(
 
 # ------------------------------------------------------------------------------
 # Auditoria dos genes HD/PD ausentes em AD
-# ------------------------------------------------------------------------------
-
 hd_pd_not_ad <- gene_master[
   presence_class == "HD_PD"
 ]
-
 
 cat("\nHD+PD ausentes em AD:\n")
 
@@ -1022,16 +875,13 @@ cat(
   "\n"
 )
 
-
 # ==============================================================================
-# 13. COMPARAR SYMBOL AD ORIGINAL vs ANOTAÇÃO
-# ==============================================================================
+# COMPARAR SYMBOL AD ORIGINAL vs ANOTAÇÃO
 
 cat("\n")
 cat("============================================\n")
 cat("COMPARAÇÃO DE SYMBOLS AD\n")
 cat("============================================\n")
-
 
 ad_symbol_comparison <- gene_master[
   in_AD &
@@ -1039,23 +889,19 @@ ad_symbol_comparison <- gene_master[
     !is.na(symbol_AD_original)
 ]
 
-
 n_symbol_compared <- nrow(
   ad_symbol_comparison
 )
-
 
 n_symbol_same <- sum(
   ad_symbol_comparison$symbol_annotation ==
     ad_symbol_comparison$symbol_AD_original
 )
 
-
 n_symbol_different <- sum(
   ad_symbol_comparison$symbol_annotation !=
     ad_symbol_comparison$symbol_AD_original
 )
-
 
 cat(
   "Comparáveis:",
@@ -1075,24 +921,13 @@ cat(
   "\n"
 )
 
-
-# IMPORTANTE:
-# diferenças de Symbol não são automaticamente corrigidas nem descartadas.
-# A tabela mestre preserva ambas as versões para rastreabilidade.
-
-
 # ==============================================================================
-# 14. CRIAR AUDITORIA DE GENES NÃO COMUNS
-# ==============================================================================
-
+# CRIAR AUDITORIA DE GENES NÃO COMUNS
 gene_presence_audit <- gene_master[
   presence_class != "AD_HD_PD"
 ]
 
-
-# Essa tabela deve conter todos os genes que seriam afetados por uma
-# eventual restrição futura ao universo comum.
-
+# Essa tabela deve conter todos os genes que seriam afetados por uma eventual restrição futura ao universo comum.
 expected_non_common <- (
   nrow(gene_master) -
     sum(
@@ -1100,75 +935,60 @@ expected_non_common <- (
     )
 )
 
-
 if (
   nrow(gene_presence_audit) !=
     expected_non_common
 ) {
-
   stop(
     "Erro na construção da auditoria de genes não comuns."
   )
 }
 
-
 # ==============================================================================
-# 15. VALIDAÇÕES FINAIS
+# VALIDAÇÕES FINAIS
 # ==============================================================================
-
 cat("\n")
 cat("============================================\n")
 cat("VALIDAÇÕES FINAIS\n")
 cat("============================================\n")
 
-
 if (nrow(gene_master) != 39620) {
-
   stop(
     "gene_master deveria possuir 39620 genes."
   )
 }
 
-
 if (anyNA(gene_master$gene_id)) {
-
   stop(
     "gene_master contém GeneID ausente."
   )
 }
 
-
 if (anyDuplicated(gene_master$gene_id)) {
-
   stop(
     "gene_master contém GeneID duplicado."
   )
 }
-
 
 if (
   sum(
     gene_master$in_AD
   ) != 19185
 ) {
-
   stop(
     "Número inesperado de genes marcados como presentes em AD."
   )
 }
-
 
 if (
   sum(
     gene_master$in_HD
   ) != 39376
 ) {
-
   stop(
     "Número inesperado de genes marcados como presentes em HD."
   )
 }
-
 
 if (
   sum(
@@ -1181,18 +1001,15 @@ if (
   )
 }
 
-
 if (
   sum(
     gene_master$presence_class == "AD_HD_PD"
   ) != 18941
 ) {
-
   stop(
     "Número inesperado de genes comuns aos três datasets."
   )
 }
-
 
 cat(
   "GeneIDs únicos:",
@@ -1229,10 +1046,6 @@ cat(
 )
 
 
-# ==============================================================================
-# 16. GRAVAR RESULTADOS
-# ==============================================================================
-
 gene_master_file <- file.path(
   output_dir,
   "gene_master.tsv"
@@ -1243,7 +1056,6 @@ gene_presence_audit_file <- file.path(
   "gene_presence_audit.tsv"
 )
 
-
 fwrite(
   gene_master,
   gene_master_file,
@@ -1251,7 +1063,6 @@ fwrite(
   quote = FALSE,
   na = "NA"
 )
-
 
 fwrite(
   gene_presence_audit,
@@ -1261,16 +1072,10 @@ fwrite(
   na = "NA"
 )
 
-
-# ==============================================================================
-# 17. FINALIZAÇÃO
-# ==============================================================================
-
 cat("\n")
 cat("============================================\n")
 cat("03_harmonize_genes.R CONCLUÍDO\n")
 cat("============================================\n")
-
 
 cat(
   "Universo total:",
@@ -1319,7 +1124,6 @@ cat(
   ),
   "genes\n"
 )
-
 
 cat("\nArquivos gerados:\n")
 

@@ -3,13 +3,7 @@
 # ==============================================================================
 # 01_prepare_metadata.R
 #
-# Objetivo:
-#   Preparar e padronizar os metadados das amostras dos três datasets:
-#
-#   AD - GSE53697
-#   HD - GSE64810
-#   PD - GSE68719
-#
+# Objetivo: Preparar e padronizar os metadados das amostras dos três datasets
 # Este script:
 #   1. identifica as amostras presentes nas matrizes de expressão;
 #   2. lê os arquivos GEO family.soft.gz;
@@ -21,11 +15,7 @@
 #   8. valida correspondência, grupos e ordem das amostras;
 #   9. gera metadados padronizados.
 #
-# IMPORTANTE:
-#   - Nenhuma amostra é removida.
-#   - Nenhuma matriz de contagens é modificada.
-#   - Nenhuma covariável é incluída em modelo estatístico nesta etapa.
-#   - Valores ausentes no GEO permanecem como NA.
+# Obs: Nenhuma amostra é removida, nenhuma matriz de contagens é modificada, nenhuma covariável é incluída em modelo estatístico nesta etapa e valores ausentes no GEO permanecem como NA.
 #
 # Saídas:
 #   results/metadata/metadata_AD.tsv
@@ -34,20 +24,14 @@
 #   results/metadata/metadata_all.tsv
 # ==============================================================================
 
-
-# ==============================================================================
-# 1. PACOTES
-# ==============================================================================
-
 suppressPackageStartupMessages({
   library(GEOquery)
   library(data.table)
   library(stringr)
 })
 
-
 # ==============================================================================
-# 2. CAMINHOS
+# CAMINHOS
 # ==============================================================================
 
 ad_expr <- "data/raw/GSE53697/GSE53697_RNAseq_AD.txt.gz"
@@ -64,7 +48,7 @@ dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 
 # ==============================================================================
-# 3. VERIFICAÇÃO DOS ARQUIVOS DE ENTRADA
+# VERIFICAÇÃO DOS ARQUIVOS DE ENTRADA
 # ==============================================================================
 
 input_files <- c(
@@ -87,17 +71,12 @@ if (length(missing_files) > 0) {
   )
 }
 
-
 # ==============================================================================
-# 4. FUNÇÕES AUXILIARES
+# FUNÇÕES AUXILIARES
 # ==============================================================================
-
-# ------------------------------------------------------------------------------
 # Colapsar um campo de metadados do GEO em uma única string
-# ------------------------------------------------------------------------------
-
+#Pega um campo de metadados do GEO, que pode ter vários valores e os transforma em um único texto, separando os valores por "|"
 collapse_meta <- function(x) {
-
   if (is.null(x) || length(x) == 0) {
     return(NA_character_)
   }
@@ -108,20 +87,12 @@ collapse_meta <- function(x) {
   if (length(x) == 0) {
     return(NA_character_)
   }
-
   paste(x, collapse = " | ")
 }
 
 
-# ------------------------------------------------------------------------------
 # Extrair uma característica do campo characteristics_ch1
-#
-# Exemplo:
-#   "age of death: 73 | diagnosis: Neurologically normal | pmi: 2"
-#
 # keys permite diferentes nomes possíveis para a mesma variável.
-# ------------------------------------------------------------------------------
-
 extract_characteristic <- function(text, keys) {
 
   if (
@@ -133,9 +104,7 @@ extract_characteristic <- function(text, keys) {
   }
 
   parts <- trimws(unlist(strsplit(text, "\\s*\\|\\s*")))
-
   for (part in parts) {
-
     if (!grepl(":", part, fixed = TRUE)) {
       next
     }
@@ -144,8 +113,7 @@ extract_characteristic <- function(text, keys) {
     field <- trimws(sub(":.*$", "", part))
 
     # Remove eventual texto entre parênteses no nome do campo.
-    # Exemplo:
-    # "post-mortem interval (pmi)" -> "post-mortem interval"
+    # Exemplo: "post-mortem interval (pmi)" -> "post-mortem interval"
     field_without_parentheses <- trimws(
       sub("\\s*\\([^)]*\\)\\s*$", "", field)
     )
@@ -158,39 +126,25 @@ extract_characteristic <- function(text, keys) {
     )
 
     if (any(field_candidates %in% tolower(keys))) {
-
       if (
         value == "" ||
         tolower(value) %in% c("na", "n/a", "nan", "unknown")
       ) {
         return(NA_character_)
       }
-
       return(value)
     }
   }
-
   NA_character_
 }
 
-
-# ------------------------------------------------------------------------------
 # Extrair primeiro número de uma string
-#
-# Exemplos:
-#   "73 years" -> 73
-#   "37.25"    -> 37.25
-#   "NA"       -> NA
-# ------------------------------------------------------------------------------
-
 extract_number <- function(x) {
 
   if (length(x) == 0 || is.na(x)) {
     return(NA_real_)
   }
-
   x <- trimws(as.character(x))
-
   if (
     x == "" ||
     tolower(x) %in% c("na", "n/a", "nan", "unknown")
@@ -207,10 +161,7 @@ extract_number <- function(x) {
 }
 
 
-# ------------------------------------------------------------------------------
 # Padronizar sexo
-# ------------------------------------------------------------------------------
-
 standardize_sex <- function(x) {
 
   if (length(x) == 0 || is.na(x)) {
@@ -238,14 +189,9 @@ standardize_sex <- function(x) {
 }
 
 
-# ------------------------------------------------------------------------------
 # Extrair metadados básicos de um objeto GSM
-# ------------------------------------------------------------------------------
-
 extract_gsm_metadata <- function(gsm_object, gsm_id) {
-
   meta <- Meta(gsm_object)
-
   title <- collapse_meta(meta$title)
   source_name <- collapse_meta(meta$source_name_ch1)
   characteristics <- collapse_meta(meta$characteristics_ch1)
@@ -258,13 +204,8 @@ extract_gsm_metadata <- function(gsm_object, gsm_id) {
   )
 }
 
-
-# ------------------------------------------------------------------------------
 # Ler todos os GSMs de um arquivo SOFT
-# ------------------------------------------------------------------------------
-
 read_soft_metadata <- function(path) {
-
   cat("Lendo SOFT:", path, "\n")
 
   geo <- GEOquery::getGEO(
@@ -273,7 +214,6 @@ read_soft_metadata <- function(path) {
   )
 
   gsms <- GEOquery::GSMList(geo)
-
   cat("  GSMs encontrados:", length(gsms), "\n")
 
   result <- rbindlist(
@@ -297,34 +237,30 @@ read_soft_metadata <- function(path) {
 }
 
 
-# ==============================================================================
-# 5. IDENTIFICAR AS AMOSTRAS NAS MATRIZES
-# ==============================================================================
-
+# IDENTIFICAR AS AMOSTRAS NAS MATRIZES
 cat("\n")
 cat("============================================\n")
 cat("IDENTIFICAÇÃO DAS AMOSTRAS NAS MATRIZES\n")
 cat("============================================\n")
 
-
-# ------------------------------------------------------------------------------
 # AD
-# ------------------------------------------------------------------------------
-
+#Lê apenas o cabeçalho e extrai o nome das colunas
 ad_header <- names(
   fread(
     ad_expr,
     nrows = 0,
-    check.names = FALSE
+    check.names = FALSE #preservar os nomes das colunas como estão no arquivo, sem tentar modificá-los para nomes sintaticamente válidos no R
   )
 )
 
+#Encontrar as amostras raw, retornando os nomes das amostras raw
 ad_raw_samples <- grep(
   "_raw$",
   ad_header,
   value = TRUE
 )
 
+#Encontrar as amostras rpkm, retornando os nomes das amostras raw
 ad_rpkm_samples <- grep(
   "_rpkm$",
   ad_header,
@@ -351,11 +287,7 @@ if (length(ad_rpkm_samples) != 17) {
   )
 }
 
-
-# ------------------------------------------------------------------------------
 # HD
-# ------------------------------------------------------------------------------
-
 hd_header <- names(
   fread(
     hd_expr,
@@ -382,10 +314,7 @@ if (!all(grepl("^GSM[0-9]+$", hd_samples))) {
 }
 
 
-# ------------------------------------------------------------------------------
 # PD
-# ------------------------------------------------------------------------------
-
 pd_header <- names(
   fread(
     pd_expr,
@@ -413,25 +342,19 @@ if (!all(grepl("^GSM[0-9]+$", pd_samples))) {
 
 
 # ==============================================================================
-# 6. LER OS ARQUIVOS SOFT
-# ==============================================================================
-
+# LER OS ARQUIVOS SOFT
 cat("\n")
 cat("============================================\n")
 cat("LEITURA DOS METADADOS GEO\n")
 cat("============================================\n")
-
 ad_geo <- read_soft_metadata(ad_soft)
 hd_geo <- read_soft_metadata(hd_soft)
 pd_geo <- read_soft_metadata(pd_soft)
 
-
 # ==============================================================================
-# 7. EXTRAIR COVARIÁVEIS COMUNS
+# EXTRAIR COVARIÁVEIS COMUNS
 # ==============================================================================
-
 add_common_covariates <- function(dt) {
-
   dt[, raw_diagnosis := vapply(
     characteristics,
     extract_characteristic,
@@ -527,24 +450,16 @@ add_common_covariates <- function(dt) {
   dt
 }
 
-
 ad_geo <- add_common_covariates(ad_geo)
 hd_geo <- add_common_covariates(hd_geo)
 pd_geo <- add_common_covariates(pd_geo)
 
 
 # ==============================================================================
-# 8. PREPARAR METADATA AD
+# PREPARAR METADATA AD
 # ==============================================================================
-
-# No arquivo de expressão:
-#   C1_raw ... C8_raw  = controles
-#   A9_raw ... A17_raw = AD
-#
-# No SOFT:
-#   RNAseq_Ctrl_1
-#   RNAseq_AD_9
-#   etc.
+# No arquivo de expressão: C1_raw = controles e A1 = AD
+# No SOFT: RNAseq_Ctrl_1 = controles e RNAseq_AD_9 = AD
 
 ad_geo[, study_sample_id := fifelse(
   str_detect(title, regex("^RNAseq_Ctrl_", ignore_case = TRUE)),
@@ -583,7 +498,6 @@ ad_geo[, original_gsm := NA_character_]
 
 
 # Associar exatamente às colunas raw da matriz AD
-
 ad_metadata <- merge(
   data.table(
     sample_id = ad_raw_samples,
@@ -594,19 +508,11 @@ ad_metadata <- merge(
   all.x = TRUE,
   sort = FALSE
 )
-
 setorder(ad_metadata, matrix_order)
 
-
 # ==============================================================================
-# 9. PREPARAR METADATA HD
-# ==============================================================================
-
-# Na matriz HD, as colunas já são GSM.
-# O title contém identificadores como:
-#   C_0002
-#   H_0726
-
+# PREPARAR METADATA HD
+# Na matriz HD, as colunas já são GSM. O title contém identificadores como C_0002 e H_0726
 hd_geo[, study_sample_id := str_extract(
   title,
   "^[CH]_[0-9]+"
@@ -628,19 +534,8 @@ hd_geo[, original_gsm := NA_character_]
 
 
 # ------------------------------------------------------------------------------
-# Variáveis clínicas específicas de HD
-#
-# A auditoria direta do SOFT confirmou:
-#   age of onset       = 20 registros
-#   cag                = 20 registros
-#   duration           = 20 registros
-#   h-v cortical score = 20 registros
-#   h-v striatal score = 20 registros
-#   vonsattel grade    = 20 registros
-#
-# São preservadas no metadata, mas NÃO são utilizadas automaticamente
-# no modelo estatístico.
-# ------------------------------------------------------------------------------
+# A auditoria direta do SOFT evidenciou Variáveis clínicas específicas de HD: age of onset, cag, duration, h-v cortical score, h-v striatal score e vonsattel grade
+# Elas serão preservadas no metadata, mas NÃO são utilizadas automaticamente no modelo estatístico.
 
 hd_geo[, age_of_onset := vapply(
   characteristics,
@@ -736,17 +631,8 @@ setorder(hd_metadata, matrix_order)
 
 
 # ==============================================================================
-# 10. PREPARAR METADATA PD
+# PREPARAR METADATA PD
 # ==============================================================================
-
-# Exemplos de títulos:
-#
-# Controle:
-#   C_0002 [reanalysis of GSM1580869]
-#
-# PD:
-#   P_0003
-
 pd_geo[, study_sample_id := str_extract(
   title,
   "^[CP]_[0-9]+"
@@ -789,19 +675,16 @@ setorder(pd_metadata, matrix_order)
 
 
 # ==============================================================================
-# 11. VALIDAÇÕES
+# VALIDAÇÕES
 # ==============================================================================
-
 cat("\n")
 cat("============================================\n")
 cat("VALIDAÇÃO DOS GRUPOS\n")
 cat("============================================\n")
 
-
 # ------------------------------------------------------------------------------
 # Função geral de validação
 # ------------------------------------------------------------------------------
-
 validate_metadata <- function(
   metadata,
   expected_samples,
@@ -869,7 +752,6 @@ validate_metadata(
 # ------------------------------------------------------------------------------
 # Validar números esperados dos grupos
 # ------------------------------------------------------------------------------
-
 ad_groups <- table(ad_metadata$group)
 hd_groups <- table(hd_metadata$group)
 pd_groups <- table(pd_metadata$group)
@@ -907,9 +789,8 @@ if (
 
 
 # ==============================================================================
-# 12. AUDITORIA DAS REANÁLISES PD / HD
+# AUDITORIA DAS REANÁLISES PD / HD
 # ==============================================================================
-
 cat("\n")
 cat("============================================\n")
 cat("REANÁLISES PD / HD\n")
@@ -956,9 +837,8 @@ if (n_reanalysis_in_hd != n_reanalysis) {
 
 
 # ==============================================================================
-# 13. AUDITORIA DOS CAMPOS CLÍNICOS ESPECÍFICOS DE HD
+# AUDITORIA DOS CAMPOS CLÍNICOS ESPECÍFICOS DE HD
 # ==============================================================================
-
 cat("\n")
 cat("============================================\n")
 cat("CAMPOS CLÍNICOS ESPECÍFICOS DE HD\n")
@@ -974,7 +854,6 @@ hd_specific_fields <- c(
 )
 
 for (field in hd_specific_fields) {
-
   n_available <- sum(
     !is.na(hd_metadata[[field]])
   )
@@ -990,11 +869,8 @@ for (field in hd_specific_fields) {
 }
 
 
-# Como a auditoria direta do SOFT mostrou 20 registros para cada
-# variável clínica específica de HD, validamos esse número.
-
+# Como a auditoria direta do SOFT mostrou 20 registros para cada variável clínica específica de HD, validamos esse número.
 for (field in hd_specific_fields) {
-
   n_available <- sum(
     !is.na(hd_metadata[[field]])
   )
@@ -1012,13 +888,8 @@ for (field in hd_specific_fields) {
 
 
 # ==============================================================================
-# 14. AUDITORIA DO PMI DE HD
-# ==============================================================================
-
-# O SOFT contém o campo PMI para as 69 amostras, porém uma delas
-# apresenta explicitamente "pmi: NA".
-#
-# Portanto, esperamos exatamente 68 valores numéricos disponíveis.
+# AUDITORIA DO PMI DE HD
+# O SOFT contém o campo PMI para as 69 amostras, porém uma delas apresenta "pmi: NA".
 
 n_hd_pmi <- sum(!is.na(hd_metadata$pmi))
 
@@ -1030,11 +901,8 @@ if (n_hd_pmi != 68) {
   )
 }
 
-
 # ==============================================================================
-# 15. SELECIONAR COLUNAS FINAIS
-# ==============================================================================
-
+# SELECIONAR COLUNAS FINAIS
 # Campos comuns aos três datasets
 
 common_columns <- c(
@@ -1053,9 +921,7 @@ common_columns <- c(
   "region"
 )
 
-
 # AD
-
 ad_final <- copy(ad_metadata)
 
 for (field in hd_specific_fields) {
@@ -1073,7 +939,6 @@ ad_final <- ad_final[
 
 
 # HD
-
 hd_final <- hd_metadata[
   ,
   c(
@@ -1085,7 +950,6 @@ hd_final <- hd_metadata[
 
 
 # PD
-
 pd_final <- copy(pd_metadata)
 
 for (field in hd_specific_fields) {
@@ -1103,9 +967,7 @@ pd_final <- pd_final[
 
 
 # ==============================================================================
-# 16. METADATA COMBINADO
-# ==============================================================================
-
+# METADATA COMBINADO
 metadata_all <- rbindlist(
   list(
     ad_final,
@@ -1136,11 +998,8 @@ if (anyDuplicated(paste(
 
 
 # ==============================================================================
-# 17. RESUMO DOS METADADOS
-# ==============================================================================
-
+# RESUMO DOS METADADOS
 summarize_metadata <- function(dt, label) {
-
   cat("\n")
   cat("--------------------------------------------\n")
   cat(label, "\n")
@@ -1233,11 +1092,8 @@ summarize_metadata(
   "PD / GSE68719"
 )
 
-
 # ==============================================================================
-# 18. GRAVAR ARQUIVOS
-# ==============================================================================
-
+# GRAVAR ARQUIVOS
 fwrite(
   ad_final,
   file.path(
@@ -1278,11 +1134,7 @@ fwrite(
   na = "NA"
 )
 
-
 # ==============================================================================
-# 19. FINALIZAÇÃO
-# ==============================================================================
-
 cat("\n")
 cat("============================================\n")
 cat("01_prepare_metadata.R CONCLUÍDO\n")

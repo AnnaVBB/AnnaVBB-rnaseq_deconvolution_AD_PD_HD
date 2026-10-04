@@ -8,38 +8,22 @@
 # 1. Avaliar a qualidade das matrizes de contagens preparadas no 02.
 # 2. Resumir características das bibliotecas/amostras antes da filtragem.
 # 3. Avaliar descritivamente thresholds de 5, 10 e 20 contagens.
-# 4. Aplicar o pré-filtro definido para EXPRESSÃO DIFERENCIAL:
-#
-#       count >= 10 em pelo menos o tamanho do menor grupo experimental
-#
+# 4. Aplicar o pré-filtro definido para EXPRESSÃO DIFERENCIAL: count >= 10 em pelo menos o tamanho do menor grupo experimental
 #       AD = 8 amostras
 #       HD = 20 amostras
 #       PD = 29 amostras
-#
 # 5. Gerar matrizes pré-filtradas para 05_deseq2.R.
 # 6. Realizar VST + PCA exclusivamente para QC exploratório.
 # 7. Calcular a interseção gênica após a pré-filtragem para DE.
-#
-# IMPORTANTE
-# ------------------------------------------------------------------------------
-# - Este filtro é específico para o ramo de expressão diferencial.
-# - A deconvolução utilizará posteriormente uma estratégia mais permissiva.
-# - Nenhuma normalização é aplicada às matrizes salvas para DESeq2.
-# - As matrizes *_DE_filtered.tsv continuam contendo counts inteiros.
-# - VST é utilizado SOMENTE para QC/PCA.
-# - Nenhuma amostra é removida automaticamente.
-# - Nenhum gene é removido com base no PCA.
 #
 # ENTRADAS
 # ------------------------------------------------------------------------------
 # results/counts/counts_AD.tsv
 # results/counts/counts_HD.tsv
 # results/counts/counts_PD.tsv
-#
 # results/metadata/metadata_AD.tsv
 # results/metadata/metadata_HD.tsv
 # results/metadata/metadata_PD.tsv
-#
 # results/harmonization/gene_master.tsv
 #
 # SAÍDAS
@@ -58,40 +42,26 @@
 #
 # ==============================================================================
 
-
-# ==============================================================================
-# 1. PACOTES
-# ==============================================================================
-
 suppressPackageStartupMessages({
   library(data.table)
   library(DESeq2)
   library(ggplot2)
 })
 
-
 # ==============================================================================
-# 2. PARÂMETROS
-# ==============================================================================
+# PARÂMETROS
 
 # Critério principal aprovado para expressão diferencial.
-
 min_count <- 10
 
-
-# Número mínimo de amostras por dataset.
-# Corresponde ao tamanho do menor grupo experimental.
-
+# Número mínimo de amostras por dataset. Corresponde ao tamanho do menor grupo experimental.
 min_samples <- c(
   AD = 8,
   HD = 20,
   PD = 29
 )
 
-
-# Thresholds avaliados apenas descritivamente.
-# Não modificam o critério principal.
-
+# Thresholds avaliados apenas descritivamente. Não modificam o critério principal.
 sensitivity_counts <- c(
   5,
   10,
@@ -99,16 +69,12 @@ sensitivity_counts <- c(
 )
 
 
-# ==============================================================================
-# 3. CAMINHOS
-# ==============================================================================
-
+# CAMINHOS
 counts_files <- c(
   AD = "results/counts/counts_AD.tsv",
   HD = "results/counts/counts_HD.tsv",
   PD = "results/counts/counts_PD.tsv"
 )
-
 
 metadata_files <- c(
   AD = "results/metadata/metadata_AD.tsv",
@@ -116,19 +82,13 @@ metadata_files <- c(
   PD = "results/metadata/metadata_PD.tsv"
 )
 
-
 gene_master_file <- "results/harmonization/gene_master.tsv"
 
-
-# Diretório para tabelas e matrizes de QC.
-
+# Diretório para tabelas e matrizes de QC
 output_dir <- "results/qc"
 
-
 # Diretório geral para figuras.
-
 plots_dir <- "results/plots"
-
 
 dir.create(
   output_dir,
@@ -136,11 +96,8 @@ dir.create(
   showWarnings = FALSE
 )
 
-
 # Criar uma pasta de figuras para cada doença.
-
 for (dataset in c("AD", "HD", "PD")) {
-
   dir.create(
     file.path(
       plots_dir,
@@ -151,25 +108,18 @@ for (dataset in c("AD", "HD", "PD")) {
   )
 }
 
-
-# ==============================================================================
-# 4. VERIFICAR ARQUIVOS DE ENTRADA
-# ==============================================================================
-
+# VERIFICAR ARQUIVOS DE ENTRADA
 input_files <- c(
   counts_files,
   metadata_files,
   gene_master_file
 )
 
-
 missing_files <- input_files[
   !file.exists(input_files)
 ]
 
-
 if (length(missing_files) > 0) {
-
   stop(
     paste0(
       "Arquivos necessários não encontrados:\n",
@@ -181,10 +131,8 @@ if (length(missing_files) > 0) {
   )
 }
 
-
 # ==============================================================================
-# 5. FUNÇÃO DE QC E PRÉ-FILTRAGEM
-# ==============================================================================
+# FUNÇÃO DE QC E PRÉ-FILTRAGEM
 
 run_qc <- function(
   dataset_name,
@@ -198,48 +146,38 @@ run_qc <- function(
   cat("QC -", dataset_name, "\n")
   cat("============================================\n")
 
-
   # ============================================================================
-  # 5.1. Ler matriz de contagens
+  # Ler matriz de contagens
   # ============================================================================
-
   counts_dt <- fread(
     counts_file,
     check.names = FALSE
   )
 
-
   if (!"GeneID" %in% names(counts_dt)) {
-
     stop(
       dataset_name,
       ": coluna GeneID não encontrada."
     )
   }
 
-
   gene_ids <- as.character(
     counts_dt$GeneID
   )
 
-
   if (anyNA(gene_ids)) {
-
     stop(
       dataset_name,
       ": existem GeneIDs ausentes."
     )
   }
 
-
   if (anyDuplicated(gene_ids)) {
-
     stop(
       dataset_name,
       ": existem GeneIDs duplicados."
     )
   }
-
 
   sample_columns <- setdiff(
     names(counts_dt),
@@ -254,16 +192,11 @@ run_qc <- function(
     ]
   )
 
-
   storage.mode(count_matrix) <- "numeric"
-
   rownames(count_matrix) <- gene_ids
 
 
-  # ============================================================================
-  # 5.2. Validar matriz de contagens
-  # ============================================================================
-
+  # Validar matriz de contagens
   if (anyNA(count_matrix)) {
 
     stop(
@@ -272,15 +205,12 @@ run_qc <- function(
     )
   }
 
-
   if (any(count_matrix < 0)) {
-
     stop(
       dataset_name,
       ": existem contagens negativas."
     )
   }
-
 
   n_fractional <- sum(
     abs(
@@ -291,7 +221,6 @@ run_qc <- function(
 
 
   if (n_fractional > 0) {
-
     stop(
       dataset_name,
       ": foram encontrados ",
@@ -300,18 +229,11 @@ run_qc <- function(
     )
   }
 
-
-  # A integralidade já foi validada.
-  # Portanto, esta conversão NÃO realiza novo arredondamento.
-
+  # A integralidade já foi validada. Portanto, esta conversão NÃO realiza novo arredondamento.
   storage.mode(count_matrix) <- "integer"
 
-
-  # ============================================================================
-  # 5.3. Ler metadata
-  # ============================================================================
-
-  metadata <- fread(
+  # Ler metadata
+    metadata <- fread(
     metadata_file,
     na.strings = c(
       "NA",
@@ -319,21 +241,17 @@ run_qc <- function(
     )
   )
 
-
   required_metadata <- c(
     "sample_id",
     "group"
   )
-
 
   missing_metadata <- setdiff(
     required_metadata,
     names(metadata)
   )
 
-
   if (length(missing_metadata) > 0) {
-
     stop(
       dataset_name,
       ": campos ausentes no metadata: ",
@@ -344,45 +262,34 @@ run_qc <- function(
     )
   }
 
-
   if (anyNA(metadata$sample_id)) {
-
     stop(
       dataset_name,
       ": existem sample_id ausentes."
     )
   }
 
-
   if (anyDuplicated(metadata$sample_id)) {
-
     stop(
       dataset_name,
       ": existem sample_id duplicados."
     )
   }
 
-
   if (anyNA(metadata$group)) {
-
     stop(
       dataset_name,
       ": existem grupos ausentes."
     )
   }
 
-
-  # ============================================================================
-  # 5.4. Validar counts <-> metadata
-  # ============================================================================
-
+  # Validar counts <-> metadata
   if (
     !setequal(
       colnames(count_matrix),
       metadata$sample_id
     )
   ) {
-
     stop(
       dataset_name,
       ": counts e metadata possuem amostras diferentes."
@@ -391,7 +298,6 @@ run_qc <- function(
 
 
   # Reordenar metadata explicitamente para acompanhar a matriz.
-
   metadata <- metadata[
     match(
       colnames(count_matrix),
@@ -399,14 +305,12 @@ run_qc <- function(
     )
   ]
 
-
   if (
     !identical(
       metadata$sample_id,
       colnames(count_matrix)
     )
   ) {
-
     stop(
       dataset_name,
       ": falha ao alinhar metadata e counts."
@@ -414,10 +318,7 @@ run_qc <- function(
   }
 
 
-  # ============================================================================
-  # 5.5. Validar grupos experimentais
-  # ============================================================================
-
+  # Validar grupos experimentais
   metadata[
     ,
     group := factor(
@@ -429,20 +330,16 @@ run_qc <- function(
     )
   ]
 
-
   if (anyNA(metadata$group)) {
-
     stop(
       dataset_name,
       ": grupo inesperado encontrado."
     )
   }
 
-
   observed_groups <- table(
     metadata$group
   )
-
 
   cat("\nAmostras por grupo:\n")
 
@@ -450,17 +347,14 @@ run_qc <- function(
     observed_groups
   )
 
-
   observed_min_group <- min(
     observed_groups
   )
-
 
   if (
     observed_min_group !=
       min_samples[[dataset_name]]
   ) {
-
     stop(
       dataset_name,
       ": tamanho do menor grupo diferente do esperado. ",
@@ -472,25 +366,19 @@ run_qc <- function(
     )
   }
 
-
-  # ============================================================================
-  # 5.6. QC DAS AMOSTRAS ANTES DA FILTRAGEM
-  # ============================================================================
-
+  
+  # QC DAS AMOSTRAS ANTES DA FILTRAGEM
   library_size <- colSums(
     count_matrix
   )
-
 
   genes_nonzero <- colSums(
     count_matrix > 0
   )
 
-
   zero_fraction <- colMeans(
     count_matrix == 0
   )
-
 
   sample_summary <- data.table(
     dataset = dataset_name,
@@ -501,9 +389,7 @@ run_qc <- function(
     zero_fraction = as.numeric(zero_fraction)
   )
 
-
   cat("\nQC das bibliotecas:\n")
-
 
   cat(
     "Library size mínima:",
@@ -511,13 +397,11 @@ run_qc <- function(
     "\n"
   )
 
-
   cat(
     "Library size mediana:",
     median(library_size),
     "\n"
   )
-
 
   cat(
     "Library size máxima:",
@@ -525,13 +409,11 @@ run_qc <- function(
     "\n"
   )
 
-
   cat(
     "Genes detectados/amostra - mínimo:",
     min(genes_nonzero),
     "\n"
   )
-
 
   cat(
     "Genes detectados/amostra - mediana:",
@@ -539,13 +421,11 @@ run_qc <- function(
     "\n"
   )
 
-
   cat(
     "Genes detectados/amostra - máximo:",
     max(genes_nonzero),
     "\n"
   )
-
 
   cat(
     "Fração de zeros/amostra - mínima:",
@@ -553,13 +433,11 @@ run_qc <- function(
     "\n"
   )
 
-
   cat(
     "Fração de zeros/amostra - mediana:",
     median(zero_fraction),
     "\n"
   )
-
 
   cat(
     "Fração de zeros/amostra - máxima:",
@@ -567,20 +445,14 @@ run_qc <- function(
     "\n"
   )
 
-
-  # ============================================================================
-  # 5.7. GENES ALL-ZERO
-  # ============================================================================
-
+  # GENES ALL-ZERO
   all_zero <- rowSums(
     count_matrix
   ) == 0
 
-
   n_all_zero <- sum(
     all_zero
   )
-
 
   cat(
     "\nGenes all-zero:",
@@ -590,13 +462,8 @@ run_qc <- function(
 
 
   # ============================================================================
-  # 5.8. ANÁLISE DESCRITIVA DE SENSIBILIDADE
-  #
-  # Mantemos o número mínimo de amostras definido pelo menor grupo e
-  # variamos apenas o número mínimo de contagens.
-  #
-  # Estes cenários NÃO substituem o filtro principal.
-  # ============================================================================
+  # ANÁLISE DESCRITIVA DE SENSIBILIDADE
+  # Mantemos o número mínimo de amostras definido pelo menor grupo e variamos apenas o número mínimo de contagens.
 
   sensitivity_dt <- rbindlist(
     lapply(
@@ -606,7 +473,6 @@ run_qc <- function(
         keep_sensitivity <- rowSums(
           count_matrix >= threshold
         ) >= min_samples[[dataset_name]]
-
 
         data.table(
           dataset = dataset_name,
@@ -625,30 +491,16 @@ run_qc <- function(
     )
   )
 
-
   cat("\nSensibilidade da pré-filtragem:\n")
-
 
   print(
     sensitivity_dt
   )
 
-
-  # ============================================================================
-  # 5.9. APLICAR PRÉ-FILTRO PRINCIPAL PARA EXPRESSÃO DIFERENCIAL
-  #
-  # count >= 10 em pelo menos:
-  #
-  #   AD = 8 amostras
-  #   HD = 20 amostras
-  #   PD = 29 amostras
-  #
-  # ============================================================================
-
+  # APLICAR PRÉ-FILTRO PRINCIPAL PARA EXPRESSÃO DIFERENCIAL
   keep <- rowSums(
     count_matrix >= min_count
   ) >= min_samples[[dataset_name]]
-
 
   filtered_matrix <- count_matrix[
     keep,
@@ -656,12 +508,10 @@ run_qc <- function(
     drop = FALSE
   ]
 
-
   cat("\n")
   cat("--------------------------------------------\n")
   cat("PRÉ-FILTRAGEM PARA EXPRESSÃO DIFERENCIAL\n")
   cat("--------------------------------------------\n")
-
 
   cat(
     "Critério: count >=",
@@ -671,13 +521,11 @@ run_qc <- function(
     "amostras\n"
   )
 
-
   cat(
     "Genes antes:",
     nrow(count_matrix),
     "\n"
   )
-
 
   cat(
     "Genes mantidos:",
@@ -685,13 +533,11 @@ run_qc <- function(
     "\n"
   )
 
-
   cat(
     "Genes removidos:",
     sum(!keep),
     "\n"
   )
-
 
   cat(
     "Percentual mantido:",
@@ -704,11 +550,7 @@ run_qc <- function(
     "%\n"
   )
 
-
-  # ============================================================================
-  # 5.10. VALIDAR MATRIZ FILTRADA
-  # ============================================================================
-
+  # VALIDAR MATRIZ FILTRADA
   if (nrow(filtered_matrix) == 0) {
 
     stop(
@@ -717,9 +559,7 @@ run_qc <- function(
     )
   }
 
-
   if (anyNA(filtered_matrix)) {
-
     stop(
       dataset_name,
       ": NA encontrado após pré-filtragem."
@@ -728,7 +568,6 @@ run_qc <- function(
 
 
   if (any(filtered_matrix < 0)) {
-
     stop(
       dataset_name,
       ": valor negativo encontrado após pré-filtragem."
@@ -751,16 +590,12 @@ run_qc <- function(
     )
   }
 
-
-  # ============================================================================
-  # 5.11. SALVAR MATRIZ FILTRADA PARA EXPRESSÃO DIFERENCIAL
-  # ============================================================================
-
+  # SALVAR MATRIZ FILTRADA PARA EXPRESSÃO DIFERENCIAL
+  
   filtered_dt <- as.data.table(
     filtered_matrix,
     keep.rownames = "GeneID"
   )
-
 
   filtered_output <- file.path(
     output_dir,
@@ -771,7 +606,6 @@ run_qc <- function(
     )
   )
 
-
   fwrite(
     filtered_dt,
     filtered_output,
@@ -779,27 +613,18 @@ run_qc <- function(
     quote = FALSE
   )
 
-
   # ============================================================================
-  # 5.12. VST PARA QC / PCA
-  #
-  # IMPORTANTE:
-  #   O VST NÃO será utilizado como entrada da análise diferencial.
-  #
-  #   blind = TRUE é utilizado porque esta é uma transformação exploratória
-  #   destinada ao QC global das amostras.
+  # VST PARA QC / PCA
+  # IMPORTANTE: O VST NÃO será utilizado como entrada da análise diferencial. blind = TRUE é utilizado porque esta é uma transformação exploratória destinada ao QC global das amostras.
   # ============================================================================
-
   cat(
     "\nExecutando VST para PCA...\n"
   )
-
 
   coldata <- data.frame(
     group = metadata$group,
     row.names = metadata$sample_id
   )
-
 
   dds_qc <- DESeqDataSetFromMatrix(
     countData = filtered_matrix,
@@ -807,23 +632,17 @@ run_qc <- function(
     design = ~ group
   )
 
-
   vsd <- vst(
     dds_qc,
     blind = TRUE
   )
 
-
-  # ============================================================================
-  # 5.13. PCA
-  # ============================================================================
-
+  # PCA
   pca_data <- plotPCA(
     vsd,
     intgroup = "group",
     returnData = TRUE
   )
-
 
   percent_var <- round(
     100 *
@@ -833,11 +652,9 @@ run_qc <- function(
       )
   )
 
-
   pca_data$sample_id <- rownames(
     pca_data
   )
-
     group_colors <- switch(
     dataset_name,
     AD = c(
@@ -889,13 +706,11 @@ run_qc <- function(
     ) +
     theme_classic()
 
-
     pca_output <- file.path(
         plots_dir,
         dataset_name,
         "PCA.png"
     )
-
 
     ggsave(
         filename = pca_output,
@@ -905,18 +720,14 @@ run_qc <- function(
         dpi = 300
     )
 
-
     cat(
         "PCA salva em:",
         pca_output,
         "\n"
     )
 
-
-  # ============================================================================
-  # 5.14. RESUMO DO FILTRO PRINCIPAL
-  # ============================================================================
-
+  # RESUMO DO FILTRO PRINCIPAL
+  
   filter_summary <- data.table(
     dataset = dataset_name,
     n_samples = ncol(count_matrix),
@@ -933,11 +744,7 @@ run_qc <- function(
     )
   )
 
-
-  # ============================================================================
-  # 5.15. RETORNAR RESULTADOS
-  # ============================================================================
-
+  # RETORNAR RESULTADOS
   return(
     list(
       sample_summary = sample_summary,
@@ -948,11 +755,7 @@ run_qc <- function(
   )
 }
 
-
-# ==============================================================================
-# 6. EXECUTAR AD
-# ==============================================================================
-
+# EXECUTAR AD
 qc_AD <- run_qc(
   dataset_name = "AD",
   disease_level = "AD",
@@ -960,11 +763,7 @@ qc_AD <- run_qc(
   metadata_file = metadata_files[["AD"]]
 )
 
-
-# ==============================================================================
-# 7. EXECUTAR HD
-# ==============================================================================
-
+# EXECUTAR HD
 qc_HD <- run_qc(
   dataset_name = "HD",
   disease_level = "HD",
@@ -972,11 +771,7 @@ qc_HD <- run_qc(
   metadata_file = metadata_files[["HD"]]
 )
 
-
-# ==============================================================================
-# 8. EXECUTAR PD
-# ==============================================================================
-
+# EXECUTAR PD
 qc_PD <- run_qc(
   dataset_name = "PD",
   disease_level = "PD",
@@ -984,11 +779,7 @@ qc_PD <- run_qc(
   metadata_file = metadata_files[["PD"]]
 )
 
-
-# ==============================================================================
-# 9. CONSOLIDAR QC DAS AMOSTRAS
-# ==============================================================================
-
+# CONSOLIDAR QC DAS AMOSTRAS
 sample_summary_all <- rbindlist(
   list(
     qc_AD$sample_summary,
@@ -996,7 +787,6 @@ sample_summary_all <- rbindlist(
     qc_PD$sample_summary
   )
 )
-
 
 fwrite(
   sample_summary_all,
@@ -1008,11 +798,7 @@ fwrite(
   quote = FALSE
 )
 
-
-# ==============================================================================
-# 10. CONSOLIDAR RESULTADOS DO PRÉ-FILTRO
-# ==============================================================================
-
+# CONSOLIDAR RESULTADOS DO PRÉ-FILTRO
 filter_summary_all <- rbindlist(
   list(
     qc_AD$filter_summary,
@@ -1020,7 +806,6 @@ filter_summary_all <- rbindlist(
     qc_PD$filter_summary
   )
 )
-
 
 sensitivity_all <- rbindlist(
   list(
@@ -1030,15 +815,10 @@ sensitivity_all <- rbindlist(
   )
 )
 
-
-# ------------------------------------------------------------------------------
 # Linhas referentes ao filtro efetivamente utilizado.
-# ------------------------------------------------------------------------------
-
 filter_summary_selected <- copy(
   filter_summary_all
 )
-
 
 filter_summary_selected[
   ,
@@ -1047,7 +827,6 @@ filter_summary_selected[
     min_samples_sensitivity = NA_integer_
   )
 ]
-
 
 filter_summary_selected <- filter_summary_selected[
   ,
@@ -1066,22 +845,16 @@ filter_summary_selected <- filter_summary_selected[
   )
 ]
 
-
-# ------------------------------------------------------------------------------
 # Linhas referentes aos cenários descritivos de sensibilidade.
-# ------------------------------------------------------------------------------
-
 sensitivity_export <- copy(
   sensitivity_all
 )
-
 
 setnames(
   sensitivity_export,
   old = "min_samples",
   new = "min_samples_sensitivity"
 )
-
 
 sensitivity_export[
   ,
@@ -1092,7 +865,6 @@ sensitivity_export[
     genes_all_zero = NA_integer_
   )
 ]
-
 
 sensitivity_export <- sensitivity_export[
   ,
@@ -1110,7 +882,6 @@ sensitivity_export <- sensitivity_export[
     percent_retained
   )
 ]
-
 
 gene_filter_summary <- rbindlist(
   list(
@@ -1133,11 +904,7 @@ fwrite(
   na = "NA"
 )
 
-
-# ==============================================================================
-# 11. UNIVERSO COMUM APÓS PRÉ-FILTRAGEM PARA DE
-# ==============================================================================
-
+# UNIVERSO COMUM APÓS PRÉ-FILTRAGEM PARA DE
 common_prefiltered <- Reduce(
   intersect,
   list(
@@ -1147,12 +914,10 @@ common_prefiltered <- Reduce(
   )
 )
 
-
 cat("\n")
 cat("============================================\n")
 cat("UNIVERSO COMUM APÓS PRÉ-FILTRAGEM PARA DE\n")
 cat("============================================\n")
-
 
 cat(
   "Genes mantidos em AD:",
@@ -1160,20 +925,17 @@ cat(
   "\n"
 )
 
-
 cat(
   "Genes mantidos em HD:",
   length(qc_HD$retained_genes),
   "\n"
 )
 
-
 cat(
   "Genes mantidos em PD:",
   length(qc_PD$retained_genes),
   "\n"
 )
-
 
 cat(
   "Genes presentes após pré-filtragem nos três datasets:",
@@ -1182,17 +944,13 @@ cat(
 )
 
 
-# ==============================================================================
-# 12. COMPARAR COM O UNIVERSO COMUM BRUTO DO 03
-# ==============================================================================
-
+# COMPARAR COM O UNIVERSO COMUM BRUTO DO 03
 gene_master <- fread(
   gene_master_file,
   colClasses = list(
     character = "gene_id"
   )
 )
-
 
 required_master_columns <- c(
   "gene_id",
@@ -1201,7 +959,6 @@ required_master_columns <- c(
   "in_PD"
 )
 
-
 missing_master_columns <- setdiff(
   required_master_columns,
   names(gene_master)
@@ -1209,7 +966,6 @@ missing_master_columns <- setdiff(
 
 
 if (length(missing_master_columns) > 0) {
-
   stop(
     "gene_master.tsv não contém as colunas esperadas: ",
     paste(
@@ -1219,14 +975,12 @@ if (length(missing_master_columns) > 0) {
   )
 }
 
-
 raw_common <- gene_master[
   in_AD == TRUE &
     in_HD == TRUE &
     in_PD == TRUE,
   gene_id
 ]
-
 
 cat(
   "Universo comum bruto do 03:",
@@ -1236,7 +990,6 @@ cat(
 
 
 if (length(raw_common) != 18941) {
-
   stop(
     "O universo comum bruto não corresponde aos 18.941 genes esperados."
   )
@@ -1248,26 +1001,22 @@ if (
     common_prefiltered %in% raw_common
   )
 ) {
-
   stop(
     "Foram encontrados genes no universo comum pós-filtro ",
     "que não pertencem ao universo comum bruto."
   )
 }
 
-
 removed_from_common <- setdiff(
   raw_common,
   common_prefiltered
 )
-
 
 cat(
   "Genes comuns brutos removidos de pelo menos um dataset pelo pré-filtro:",
   length(removed_from_common),
   "\n"
 )
-
 
 cat(
   "Percentual do universo comum bruto preservado:",
@@ -1281,23 +1030,17 @@ cat(
 )
 
 
-# ==============================================================================
-# 13. RESUMO FINAL
-# ==============================================================================
-
+# RESUMO FINAL
 cat("\n")
 cat("============================================\n")
 cat("RESUMO FINAL DO QC\n")
 cat("============================================\n")
 
-
 print(
   filter_summary_all
 )
 
-
 cat("\nCritério utilizado para expressão diferencial:\n")
-
 
 cat(
   "count >=",
@@ -1305,13 +1048,11 @@ cat(
   "em pelo menos o tamanho do menor grupo de cada dataset.\n"
 )
 
-
 cat(
   "AD:",
   min_samples[["AD"]],
   "amostras\n"
 )
-
 
 cat(
   "HD:",
@@ -1319,77 +1060,62 @@ cat(
   "amostras\n"
 )
 
-
 cat(
   "PD:",
   min_samples[["PD"]],
   "amostras\n"
 )
 
-
 cat("\n")
 cat("Matrizes geradas para DESeq2:\n")
-
 
 cat(
   " - results/qc/counts_AD_DE_filtered.tsv\n"
 )
 
-
 cat(
   " - results/qc/counts_HD_DE_filtered.tsv\n"
 )
-
 
 cat(
   " - results/qc/counts_PD_DE_filtered.tsv\n"
 )
 
-
 cat("\n")
 cat("Figuras geradas:\n")
-
 
 cat(
   " - results/plots/AD/PCA.png\n"
 )
 
-
 cat(
   " - results/plots/HD/PCA.png\n"
 )
 
-
 cat(
   " - results/plots/PD/PCA.png\n"
 )
-
 
 cat("\n")
 cat("============================================\n")
 cat("04_qc_counts.R CONCLUÍDO\n")
 cat("============================================\n")
 
-
 cat(
   "Nenhuma amostra foi removida automaticamente.\n"
 )
-
 
 cat(
   "VST foi utilizado somente para PCA/QC.\n"
 )
 
-
 cat(
   "As matrizes DE filtradas permanecem em escala de contagens inteiras.\n"
 )
 
-
 cat(
   "O filtro aplicado aqui é específico para expressão diferencial.\n"
 )
-
 
 cat(
   "A deconvolução utilizará posteriormente uma estratégia de filtragem própria.\n"

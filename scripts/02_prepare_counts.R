@@ -2,44 +2,18 @@
 
 # ==============================================================================
 # 02_prepare_counts.R
-#
-# Objetivo:
-#   Preparar as matrizes de contagens brutas que serão utilizadas nas etapas
-#   posteriores do pipeline.
-#
-# Datasets:
-#   AD - GSE53697
-#   HD - GSE64810
-#   PD - GSE68719
+# Objetivo: Preparar as matrizes de contagens brutas que serão utilizadas nas etapas posteriores do pipeline.
 #
 # Este script:
-#   1. lê as matrizes brutas auditadas em 00_audit_raw_data.R;
-#   2. lê os metadados preparados em 01_prepare_metadata.R;
-#   3. para AD, seleciona exclusivamente GeneID + colunas *_raw;
-#   4. exclui as colunas *_rpkm da matriz preparada de AD;
-#   5. audita e arredonda as contagens fracionárias de AD para o inteiro
-#      mais próximo;
-#   6. preserva HD e PD sem transformação numérica;
-#   7. garante que todas as matrizes tenham GeneID + amostras;
-#   8. valida a correspondência e a ordem counts <-> metadata;
-#   9. valida que todas as contagens finais sejam inteiras, não negativas
-#      e sem valores ausentes;
-#  10. grava as três matrizes preparadas.
+#   1. lê as matrizes brutas auditadas em 00_audit_raw_data.R e os metadados preparados em 01_prepare_metadata.R;
+#   2. para AD, seleciona exclusivamente GeneID + colunas *_raw, excluindo as colunas *_rpkm da matriz preparada de AD;
+#   3. audita e arredonda as contagens fracionárias de AD para o inteiro mais próximo;
+#   4. preserva HD e PD sem transformação numérica;
+#   4. garante que todas as matrizes tenham GeneID + amostras;
+#   5. valida a correspondência e a ordem counts <-> metadata;
+#   6. valida que todas as contagens finais sejam inteiras, não negativas e sem valores ausentes;
 #
-# IMPORTANTE:
-#   - Os arquivos brutos originais NÃO são modificados.
-#   - Nenhum gene é removido nesta etapa.
-#   - Nenhum filtro de baixa expressão é aplicado.
-#   - Nenhuma normalização é realizada.
-#   - Nenhuma harmonização entre datasets é realizada.
-#   - Nenhuma análise de expressão diferencial é realizada.
-#
-# O arredondamento de AD é realizado porque o arquivo original contém
-# valores fracionários nas colunas identificadas como *_raw, enquanto o
-# fluxo padrão do DESeq2 requer contagens inteiras não negativas.
-#
-# A decisão de arredondar para o inteiro mais próximo foi definida
-# previamente para este projeto.
+# O arredondamento de AD é realizado porque o arquivo original contém valores fracionários nas colunas identificadas como *_raw, enquanto o fluxo padrão do DESeq2 requer contagens inteiras não negativas.
 #
 # Saídas:
 #   results/counts/counts_AD.tsv
@@ -47,22 +21,11 @@
 #   results/counts/counts_PD.tsv
 # ==============================================================================
 
-
-# ==============================================================================
-# 1. PACOTES
-# ==============================================================================
-
 suppressPackageStartupMessages({
   library(data.table)
 })
 
-
-# ==============================================================================
-# 2. CAMINHOS
-# ==============================================================================
-
 # Matrizes brutas
-
 ad_file <- "data/raw/GSE53697/GSE53697_RNAseq_AD.txt.gz"
 
 hd_file <- paste0(
@@ -77,14 +40,12 @@ pd_file <- paste0(
 
 
 # Metadados preparados na etapa 01
-
 ad_metadata_file <- "results/metadata/metadata_AD.tsv"
 hd_metadata_file <- "results/metadata/metadata_HD.tsv"
 pd_metadata_file <- "results/metadata/metadata_PD.tsv"
 
 
 # Diretório de saída
-
 output_dir <- "results/counts"
 
 dir.create(
@@ -93,11 +54,7 @@ dir.create(
   showWarnings = FALSE
 )
 
-
-# ==============================================================================
-# 3. VERIFICAR ARQUIVOS DE ENTRADA
-# ==============================================================================
-
+# VERIFICAR ARQUIVOS DE ENTRADA
 input_files <- c(
   ad_file,
   hd_file,
@@ -112,7 +69,6 @@ missing_files <- input_files[
 ]
 
 if (length(missing_files) > 0) {
-
   stop(
     paste0(
       "Arquivos de entrada não encontrados:\n",
@@ -126,25 +82,14 @@ if (length(missing_files) > 0) {
 
 
 # ==============================================================================
-# 4. FUNÇÕES AUXILIARES
+# FUNÇÕES AUXILIARES
 # ==============================================================================
-
-# ------------------------------------------------------------------------------
 # Verificar GeneID
-# ------------------------------------------------------------------------------
-
 validate_gene_id <- function(dt, dataset_name) {
-
   if (!"GeneID" %in% names(dt)) {
-    stop(
-      dataset_name,
-      ": coluna GeneID não encontrada."
-    )
-  }
+    stop(dataset_name, ": coluna GeneID não encontrada.")}
 
-  gene_id <- as.character(
-    dt$GeneID
-  )
+  gene_id <- as.character(dt$GeneID)
 
   missing_gene_id <- (
     is.na(gene_id) |
@@ -152,27 +97,15 @@ validate_gene_id <- function(dt, dataset_name) {
   )
 
   if (any(missing_gene_id)) {
-    stop(
-      dataset_name,
-      ": existem GeneIDs ausentes."
-    )
-  }
+    stop(dataset_name, ": existem GeneIDs ausentes.")}
 
   if (anyDuplicated(gene_id)) {
-    stop(
-      dataset_name,
-      ": existem GeneIDs duplicados."
-    )
-  }
+    stop(dataset_name, ": existem GeneIDs duplicados.")}
 
   invisible(TRUE)
 }
 
-
-# ------------------------------------------------------------------------------
-# Validar correspondência counts <-> metadata
-# ------------------------------------------------------------------------------
-
+# Verificar se As colunas da matriz de expressão correspondem exatamente às linhas do metadata
 validate_sample_mapping <- function(
   counts,
   metadata,
@@ -222,7 +155,6 @@ validate_sample_mapping <- function(
   )
 
   if (length(missing_in_metadata) > 0) {
-
     stop(
       dataset_name,
       ": amostras da matriz ausentes no metadata: ",
@@ -234,7 +166,6 @@ validate_sample_mapping <- function(
   }
 
   if (length(missing_in_counts) > 0) {
-
     stop(
       dataset_name,
       ": amostras do metadata ausentes na matriz: ",
@@ -260,11 +191,7 @@ validate_sample_mapping <- function(
   invisible(TRUE)
 }
 
-
-# ------------------------------------------------------------------------------
 # Validar matriz de contagens final
-# ------------------------------------------------------------------------------
-
 validate_final_counts <- function(
   counts,
   dataset_name
@@ -328,11 +255,7 @@ validate_final_counts <- function(
   invisible(TRUE)
 }
 
-
-# ------------------------------------------------------------------------------
 # Resumo de uma matriz preparada
-# ------------------------------------------------------------------------------
-
 summarize_counts <- function(
   counts,
   dataset_name
@@ -357,32 +280,12 @@ summarize_counts <- function(
   cat(dataset_name, "\n")
   cat("--------------------------------------------\n")
 
-  cat(
-    "Genes:",
-    nrow(counts),
-    "\n"
-  )
+  cat("Genes:", nrow(counts), "\n")
+  cat("Amostras:", length(sample_columns), "\n")
+  cat("Valores de contagem:", length(x), "\n")
+  cat("NA:", sum(is.na(x)), "\n")
 
-  cat(
-    "Amostras:",
-    length(sample_columns),
-    "\n"
-  )
-
-  cat(
-    "Valores de contagem:",
-    length(x),
-    "\n"
-  )
-
-  cat(
-    "NA:",
-    sum(is.na(x)),
-    "\n"
-  )
-
-  cat(
-    "Negativos:",
+  cat("Negativos:",
     sum(
       x < 0,
       na.rm = TRUE
@@ -429,9 +332,7 @@ summarize_counts <- function(
 
 
 # ==============================================================================
-# 5. LER METADADOS
-# ==============================================================================
-
+# LER METADADOS
 cat("\n")
 cat("============================================\n")
 cat("LEITURA DOS METADADOS\n")
@@ -479,7 +380,6 @@ cat(
   "amostras\n"
 )
 
-
 if (nrow(ad_metadata) != 17) {
   stop("Metadata AD deveria possuir 17 amostras.")
 }
@@ -494,8 +394,7 @@ if (nrow(pd_metadata) != 73) {
 
 
 # ==============================================================================
-# 6. PREPARAR AD
-# ==============================================================================
+# PREPARAR AD
 
 cat("\n")
 cat("============================================\n")
@@ -507,11 +406,7 @@ ad_raw <- fread(
   check.names = FALSE
 )
 
-
-# ------------------------------------------------------------------------------
 # Validar estrutura original
-# ------------------------------------------------------------------------------
-
 required_ad_annotation <- c(
   "GeneID",
   "GeneSymbol"
@@ -526,7 +421,6 @@ if (!all(
     "AD: GeneID e/ou GeneSymbol não encontrados."
   )
 }
-
 
 ad_raw_columns <- grep(
   "_raw$",
@@ -550,7 +444,6 @@ if (length(ad_raw_columns) != 17) {
   )
 }
 
-
 if (length(ad_rpkm_columns) != 17) {
 
   stop(
@@ -561,13 +454,7 @@ if (length(ad_rpkm_columns) != 17) {
 }
 
 
-# ------------------------------------------------------------------------------
 # Criar matriz contendo SOMENTE GeneID + raw counts
-#
-# GeneSymbol não é usado como chave da matriz.
-# Ele será tratado posteriormente na harmonização/anotação.
-# ------------------------------------------------------------------------------
-
 ad_counts <- ad_raw[
   ,
   c(
@@ -577,17 +464,13 @@ ad_counts <- ad_raw[
   with = FALSE
 ]
 
-
 validate_gene_id(
   ad_counts,
   "AD"
 )
 
 
-# ------------------------------------------------------------------------------
 # Auditoria ANTES do arredondamento
-# ------------------------------------------------------------------------------
-
 ad_before <- as.matrix(
   ad_counts[
     ,
@@ -633,7 +516,6 @@ fractional_percent <- (
     total_values_ad
 )
 
-
 cat(
   "Genes:",
   nrow(ad_counts),
@@ -672,25 +554,12 @@ cat(
 )
 
 
-# ------------------------------------------------------------------------------
-# Arredondamento
-#
-# round() utiliza arredondamento para o inteiro mais próximo.
-#
-# IMPORTANTE:
-#   O arquivo bruto permanece inalterado.
-#   A transformação ocorre somente no objeto ad_counts.
-# ------------------------------------------------------------------------------
-
+# Arredondamento dos valores não inteiros no objeto ad_counts. para o inteiro mais próximo.
 ad_after <- round(
   ad_before
 )
 
-
-# ------------------------------------------------------------------------------
 # Auditoria do efeito do arredondamento
-# ------------------------------------------------------------------------------
-
 rounding_difference <- (
   ad_after -
     ad_before
@@ -789,13 +658,8 @@ cat(
   "\n"
 )
 
-
-# ------------------------------------------------------------------------------
 # Garantias específicas do arredondamento
-# ------------------------------------------------------------------------------
-
 if (n_fractional_before == 0) {
-
   stop(
     "AD: nenhum valor fracionário foi encontrado. ",
     "Isso difere da auditoria realizada na etapa 00."
@@ -804,7 +668,6 @@ if (n_fractional_before == 0) {
 
 
 if (max_abs_change > 0.5 + 1e-8) {
-
   stop(
     "AD: alteração de arredondamento superior a 0.5 detectada."
   )
@@ -812,17 +675,13 @@ if (max_abs_change > 0.5 + 1e-8) {
 
 
 if (n_fractional_after != 0) {
-
   stop(
     "AD: ainda existem valores não inteiros após o arredondamento."
   )
 }
 
 
-# ------------------------------------------------------------------------------
 # Substituir somente as colunas de contagem no objeto preparado
-# ------------------------------------------------------------------------------
-
 ad_counts[
   ,
   (ad_raw_columns) := as.data.table(
@@ -830,9 +689,7 @@ ad_counts[
   )
 ]
 
-
 # Liberar objeto bruto grande
-
 rm(
   ad_raw,
   ad_before,
@@ -846,9 +703,7 @@ gc()
 
 
 # ==============================================================================
-# 7. PREPARAR HD
-# ==============================================================================
-
+# PREPARAR HD
 cat("\n")
 cat("============================================\n")
 cat("PREPARAÇÃO HD / GSE64810\n")
@@ -859,12 +714,10 @@ hd_counts <- fread(
   check.names = FALSE
 )
 
-
 validate_gene_id(
   hd_counts,
   "HD"
 )
-
 
 hd_sample_columns <- setdiff(
   names(hd_counts),
@@ -873,7 +726,6 @@ hd_sample_columns <- setdiff(
 
 
 if (length(hd_sample_columns) != 69) {
-
   stop(
     "HD: esperadas 69 amostras; encontradas ",
     length(hd_sample_columns),
@@ -954,10 +806,7 @@ rm(
 gc()
 
 
-# ==============================================================================
-# 8. PREPARAR PD
-# ==============================================================================
-
+# PREPARAR PD
 cat("\n")
 cat("============================================\n")
 cat("PREPARAÇÃO PD / GSE68719\n")
@@ -968,12 +817,10 @@ pd_counts <- fread(
   check.names = FALSE
 )
 
-
 validate_gene_id(
   pd_counts,
   "PD"
 )
-
 
 pd_sample_columns <- setdiff(
   names(pd_counts),
@@ -982,14 +829,12 @@ pd_sample_columns <- setdiff(
 
 
 if (length(pd_sample_columns) != 73) {
-
   stop(
     "PD: esperadas 73 amostras; encontradas ",
     length(pd_sample_columns),
     "."
   )
 }
-
 
 pd_matrix <- as.matrix(
   pd_counts[
@@ -1000,20 +845,17 @@ pd_matrix <- as.matrix(
 
 storage.mode(pd_matrix) <- "numeric"
 
-
 if (anyNA(pd_matrix)) {
   stop(
     "PD: existem valores NA."
   )
 }
 
-
 if (any(pd_matrix < 0)) {
   stop(
     "PD: existem contagens negativas."
   )
 }
-
 
 pd_fractional <- sum(
   abs(
@@ -1024,14 +866,12 @@ pd_fractional <- sum(
 
 
 if (pd_fractional != 0) {
-
   stop(
     "PD: foram encontrados ",
     pd_fractional,
     " valores não inteiros."
   )
 }
-
 
 cat(
   "Genes:",
@@ -1055,7 +895,6 @@ cat(
   "Transformação numérica aplicada: nenhuma\n"
 )
 
-
 rm(
   pd_matrix
 )
@@ -1064,14 +903,11 @@ gc()
 
 
 # ==============================================================================
-# 9. VALIDAR CORRESPONDÊNCIA COUNTS <-> METADATA
-# ==============================================================================
-
+# VALIDAR CORRESPONDÊNCIA COUNTS <-> METADATA
 cat("\n")
 cat("============================================\n")
 cat("VALIDAÇÃO COUNTS <-> METADATA\n")
 cat("============================================\n")
-
 
 validate_sample_mapping(
   ad_counts,
@@ -1083,7 +919,6 @@ cat(
   "AD: 17 / 17 amostras correspondentes e na ordem correta\n"
 )
 
-
 validate_sample_mapping(
   hd_counts,
   hd_metadata,
@@ -1093,7 +928,6 @@ validate_sample_mapping(
 cat(
   "HD: 69 / 69 amostras correspondentes e na ordem correta\n"
 )
-
 
 validate_sample_mapping(
   pd_counts,
@@ -1105,16 +939,12 @@ cat(
   "PD: 73 / 73 amostras correspondentes e na ordem correta\n"
 )
 
-
 # ==============================================================================
-# 10. VALIDAÇÃO FINAL DAS MATRIZES
-# ==============================================================================
-
+# VALIDAÇÃO FINAL DAS MATRIZES
 cat("\n")
 cat("============================================\n")
 cat("VALIDAÇÃO FINAL DAS CONTAGENS\n")
 cat("============================================\n")
-
 
 validate_final_counts(
   ad_counts,
@@ -1130,7 +960,6 @@ validate_final_counts(
   pd_counts,
   "PD"
 )
-
 
 cat(
   "AD: matriz válida\n"
@@ -1144,16 +973,11 @@ cat(
   "PD: matriz válida\n"
 )
 
-
-# ==============================================================================
-# 11. RESUMO DAS MATRIZES PREPARADAS
-# ==============================================================================
-
+# RESUMO DAS MATRIZES PREPARADAS
 cat("\n")
 cat("============================================\n")
 cat("RESUMO DAS MATRIZES PREPARADAS\n")
 cat("============================================\n")
-
 
 summarize_counts(
   ad_counts,
@@ -1170,10 +994,6 @@ summarize_counts(
   "PD / GSE68719"
 )
 
-
-# ==============================================================================
-# 12. GRAVAR MATRIZES
-# ==============================================================================
 
 ad_output <- file.path(
   output_dir,
@@ -1216,10 +1036,7 @@ fwrite(
 )
 
 
-# ==============================================================================
-# 13. VERIFICAR ARQUIVOS GRAVADOS
-# ==============================================================================
-
+# VERIFICAR ARQUIVOS GRAVADOS
 if (!file.exists(ad_output)) {
   stop(
     "Falha ao gerar ",
@@ -1241,10 +1058,6 @@ if (!file.exists(pd_output)) {
   )
 }
 
-
-# ==============================================================================
-# 14. FINALIZAÇÃO
-# ==============================================================================
 
 cat("\n")
 cat("============================================\n")
@@ -1274,7 +1087,6 @@ cat(
   ncol(pd_counts) - 1,
   "amostras\n"
 )
-
 
 cat("\nArredondamento AD:\n")
 

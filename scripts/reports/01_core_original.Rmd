@@ -30,9 +30,9 @@ suppressPackageStartupMessages({
 
 project_root <- normalizePath(getwd(), mustWork = TRUE)
 
-# ------------------------------------------------------------------
+# 
 # Diretórios
-# ------------------------------------------------------------------
+# 
 
 metadata_dir <- file.path(project_root, "results", "metadata")
 qc_dir <- file.path(project_root, "results", "qc")
@@ -60,9 +60,9 @@ dataset_info <- tibble::tibble(
   )
 )
 
-# ------------------------------------------------------------------
+# 
 # Funções auxiliares
-# ------------------------------------------------------------------
+# 
 
 read_tsv_if_exists <- function(path) {
   if (!file.exists(path)) return(NULL)
@@ -97,9 +97,9 @@ fmt_num <- function(x, digits = 3) {
   formatC(as.numeric(x), format = "f", digits = digits, decimal.mark = ",")
 }
 
-# ------------------------------------------------------------------
+# 
 # Tabelas de resultados
-# ------------------------------------------------------------------
+# 
 
 metadata_all <- read_tsv_if_exists(
   file.path(metadata_dir, "metadata_all.tsv")
@@ -145,9 +145,9 @@ shared_gsea_kegg <- read_tsv_if_exists(
   file.path(integration_dir, "shared_GSEA_KEGG.tsv")
 )
 
-# ------------------------------------------------------------------
+# 
 # Helpers para valores inline
-# ------------------------------------------------------------------
+# 
 
 get_de <- function(dataset, metric) {
   if (is.null(deseq_summary)) return(NA)
@@ -192,9 +192,18 @@ get_rho <- function(pair) {
   x[[1]]
 }
 
-# ------------------------------------------------------------------
+get_corr_n <- function(pair) {
+  if (is.null(correlation_summary)) return(NA)
+  x <- correlation_summary %>%
+    filter(pair == !!pair) %>%
+    pull(n_genes)
+  if (length(x) == 0) return(NA)
+  x[[1]]
+}
+
+# 
 # CSS simples
-# ------------------------------------------------------------------
+# 
 ```
 
 <style>
@@ -251,7 +260,7 @@ O objetivo foi analisar cada estudo independentemente e, em seguida, realizar um
 
 A estratégia foi deliberadamente construída para evitar que a integração dependesse apenas da interseção de listas discretas de DEGs, uma vez que estudos com tamanhos amostrais, variabilidade e poder estatístico diferentes podem compartilhar alterações funcionais mesmo quando não compartilham genes individualmente significativos.
 
----
+
 
 # 2. Metodologia
 
@@ -464,20 +473,43 @@ O NES não deve ser interpretado automaticamente como ativação ou inibição f
 
 ## 2.10 Integração transdiagnóstica
 
-A integração foi restrita ao **universo comum testável**, definido como genes com efeito e teste estatístico válidos nos três datasets.
+A integração foi conduzida utilizando **universos de comparação definidos de acordo com a pergunta analítica**, evitando misturar ausência de teste com ausência de efeito.
 
-Foram comparados:
+Para as análises envolvendo simultaneamente AD, HD e PD, foi utilizado o **universo comum testável**, definido pela interseção dos genes com `p-value` e `log2FoldChange` válidos nos três datasets:
 
-- classificação de DEG;
-- `log2FoldChange`;
-- direção do efeito;
-- correlação dos efeitos;
-- termos GSEA compartilhados;
-- ORA compartilhada entre HD e PD.
+\[
+U_{AD,HD,PD}=U_{AD}\cap U_{HD}\cap U_{PD}
+\]
 
-A integração funcional foi considerada particularmente importante para AD, uma vez que a ausência de DEGs individuais não impede a existência de alterações coordenadas em conjuntos gênicos.
+Esse universo foi utilizado para comparar a classificação de DEG entre as três doenças e para avaliar concordância direcional transdiagnóstica.
 
----
+Para a comparação específica entre HD e PD, foi construído um **universo pareado**:
+
+\[
+U_{HD,PD}=U_{HD}\cap U_{PD}
+\]
+
+Dessa forma, um gene testável em HD e PD não é excluído da comparação apenas por não estar presente ou testável em AD. As correlações de Spearman entre os `log2FoldChange` também foram calculadas em universos pareados (`AD∩HD`, `AD∩PD` e `HD∩PD`).
+
+Foram produzidos três diagramas de Venn com objetivos distintos:
+
+1. **Venn do universo comum — critério principal:** FDR < 0,05 e `|log2FC| > 0,58`, restrito aos genes testáveis nos três datasets;
+2. **Venn do universo comum — análise de sensibilidade:** FDR < 0,05 e `|log2FC| > 1`, também restrito ao universo comum;
+3. **Venn comparativo nominal ("article-like"):** `p < 0,05` e `|log2FC| > 1`, utilizando as listas completas de genes que satisfizeram esse critério em cada dataset, sem restringir previamente ao universo comum.
+
+O terceiro Venn foi incluído para permitir comparação conceitual com a estratégia de interseção empregada no estudo comparativo de referência. Ele **não substitui o critério principal do presente trabalho**, pois utiliza significância nominal em vez de FDR.
+
+Além da sobreposição de DEGs, foram integrados:
+
+- magnitude e direção dos `log2FoldChange`;
+- correlações de Spearman entre pares de doenças;
+- concordância direcional dos DEGs compartilhados;
+- termos GSEA significativos compartilhados;
+- resultados de ORA compartilhados entre HD e PD.
+
+A integração funcional foi considerada particularmente importante para AD, uma vez que a ausência de DEGs individuais após correção por múltiplos testes não impede a existência de alterações coordenadas em conjuntos gênicos.
+
+
 
 # 3. Visão geral dos resultados
 
@@ -523,7 +555,7 @@ Os três datasets apresentaram comportamentos distintos. AD não apresentou gene
 
 PD apresentou o maior número de DEGs pelo critério principal, enquanto HD manteve maior número de DEGs quando aplicado o limiar mais restritivo de `|log2FC| > 1`.
 
----
+
 
 # 4. Resultados — Alzheimer
 
@@ -627,7 +659,7 @@ O padrão predominante foi enriquecimento positivo de processos imunes, compleme
 
 </div>
 
----
+
 
 # 5. Resultados — Huntington
 
@@ -777,7 +809,7 @@ Os resultados convergiram para enriquecimento positivo de processos imunes/infla
 
 </div>
 
----
+
 
 # 6. Resultados — Parkinson
 
@@ -910,7 +942,7 @@ A análise funcional revelou um contraste claro entre enriquecimento imunoinflam
 
 </div>
 
----
+
 
 # 7. Comparação entre AD, HD e PD
 
@@ -980,105 +1012,328 @@ em contraste com:
 
 Esse padrão foi mais explícito em HD e PD, nos quais ORA e GSEA convergiram, mas também foi detectado em AD por GSEA mesmo na ausência de DEGs individuais.
 
----
 
 # 8. Integração transdiagnóstica
 
-## 8.1 Universo comum testável
+## 8.1 Universo comum de genes testáveis
 
-O universo comum testável foi composto por **`r fmt_int(get_integration("common_testable_universe"))` genes**.
+Para realizar comparações transdiagnósticas sem confundir **ausência de teste** com **ausência de significância estatística**, foi inicialmente definido um universo comum de genes testáveis.
 
-A utilização de um universo comum evita interpretar como "não significativo" em um dataset um gene que não estava disponível ou testável naquele estudo.
+Foram considerados testáveis os genes que apresentaram estimativas válidas de `log2FoldChange` e `p-value` nas análises de expressão diferencial de cada dataset.
 
-## 8.2 Distribuição dos DEGs no universo comum
+A interseção dos universos testáveis de AD, HD e PD resultou em:
 
-```{r primary-patterns, fig.cap="Distribuição dos DEGs do critério principal entre AD, HD e PD no universo comum testável."}
+\[
+U_{AD}^{testável}
+\cap
+U_{HD}^{testável}
+\cap
+U_{PD}^{testável}
+=
+`r fmt_int(get_integration("common_testable_universe"))`
+\text{ genes}
+\]
+
+Portanto, **`r fmt_int(get_integration("common_testable_universe"))` genes puderam ser diretamente comparados nas três doenças**.
+
+Esse conjunto foi utilizado nas análises que exigiam comparabilidade simultânea entre AD, HD e PD.
+
+É importante destacar que esse número **não representa genes diferencialmente expressos compartilhados entre as três doenças**. Ele representa apenas o conjunto de genes para os quais havia informação estatística disponível nos três datasets.
+
+
+
+## 8.2 Distribuição dos DEGs no universo comum testável
+
+```{r primary-patterns, fig.cap="Distribuição dos DEGs identificados pelo critério principal no universo comum de genes testáveis entre AD, HD e PD."}
 show_figure(
   integration_plot_path("primary_deg_patterns.png")
 )
 ```
 
-No universo comum testável, os DEGs principais distribuíram-se em:
+Após restringir a análise aos **`r fmt_int(get_integration("common_testable_universe"))` genes testáveis nas três doenças**, os genes diferencialmente expressos foram classificados de acordo com os datasets nos quais satisfizeram o critério principal:
 
-- AD exclusivo: `r fmt_int(get_integration("primary_AD_only"))`;
-- HD exclusivo: `r fmt_int(get_integration("primary_HD_only"))`;
-- PD exclusivo: `r fmt_int(get_integration("primary_PD_only"))`;
-- HD + PD: `r fmt_int(get_integration("primary_HD_PD"))`;
-- AD + HD + PD: `r fmt_int(get_integration("primary_AD_HD_PD"))`.
+\[
+FDR < 0,05
+\quad \text{e} \quad
+|\log_2FC| > 0,58
+\]
 
-## 8.3 Diagrama de Venn — critério principal
+Foram identificados:
 
-```{r venn-primary, fig.cap="Interseção dos DEGs entre AD, HD e PD segundo o critério principal. As áreas dos círculos são esquemáticas e não proporcionais ao número de genes."}
-show_figure(
-  integration_plot_path("venn_primary_AD_HD_PD.png")
+- **`r fmt_int(get_integration("common_primary_HD_only"))` genes exclusivos de HD**;
+- **`r fmt_int(get_integration("common_primary_PD_only"))` genes exclusivos de PD**;
+- **`r fmt_int(get_integration("common_primary_HD_PD"))` genes diferencialmente expressos simultaneamente em HD e PD**.
+
+Nenhum gene foi classificado como DEG em AD pelo critério principal. Consequentemente, não foram observadas interseções envolvendo AD.
+
+Assim, dentro do universo diretamente comparável entre as três doenças, a sobreposição gênica significativa ocorreu exclusivamente entre HD e PD.
+
+Esse resultado deve ser distinguido dos totais completos de DEGs obtidos separadamente em cada dataset. O universo comum restringe a comparação apenas aos genes que puderam ser avaliados nas três doenças.
+
+
+
+## 8.3 Análise de sensibilidade no universo comum
+
+Para avaliar a robustez da sobreposição observada, foi aplicado um limiar de magnitude mais restritivo:
+
+\[
+FDR < 0,05
+\quad \text{e} \quad
+|\log_2FC| > 1
+\]
+
+mantendo o mesmo universo comum de genes testáveis.
+
+```{r common-sensitivity-table}
+sensitivity_common_table <- tibble::tibble(
+  Categoria = c(
+    "HD exclusivo",
+    "PD exclusivo",
+    "HD + PD"
+  ),
+  `Critério principal` = c(
+    get_integration("common_primary_HD_only"),
+    get_integration("common_primary_PD_only"),
+    get_integration("common_primary_HD_PD")
+  ),
+  `Análise de sensibilidade` = c(
+    get_integration("common_sensitivity_HD") -
+      get_integration("common_sensitivity_HD_PD"),
+    get_integration("common_sensitivity_PD") -
+      get_integration("common_sensitivity_HD_PD"),
+    get_integration("common_sensitivity_HD_PD")
+  )
+)
+
+kable(
+  sensitivity_common_table,
+  caption = "Distribuição dos DEGs no universo comum testável utilizando o critério principal e a análise de sensibilidade."
 )
 ```
 
-A interseção gênica estrita concentrou-se em HD e PD.
+Com o critério principal, foram observados 717 genes exclusivos de HD, 1.173 exclusivos de PD e 536 compartilhados entre HD e PD.
 
-Foram compartilhados **`r fmt_int(get_integration("primary_HD_PD"))` DEGs entre HD e PD**, enquanto AD não apresentou DEGs pelo critério principal.
+Com o limiar de sensibilidade, esses números foram reduzidos para 257 genes exclusivos de HD, 200 exclusivos de PD e 100 compartilhados entre HD e PD.
 
-O Venn deve ser interpretado como representação dos conjuntos e de suas interseções; as áreas não são proporcionais aos tamanhos dos conjuntos.
+A redução é esperada, uma vez que o segundo critério exige alterações de maior magnitude.
 
-## 8.4 Diagrama de Venn — análise de sensibilidade
+Apesar dessa redução, a existência de uma interseção HD–PD foi preservada, indicando que parte da convergência transcriptômica entre as duas doenças permanece mesmo quando são considerados apenas efeitos mais fortes.
 
-```{r venn-sensitivity, fig.cap="Interseção dos DEGs entre AD, HD e PD na análise de sensibilidade (FDR < 0,05 e |log2FC| > 1). As áreas dos círculos são esquemáticas."}
+
+
+## 8.4 Interseção das listas completas — critério nominal comparativo
+
+Para permitir uma comparação conceitualmente mais próxima daquela empregada no estudo comparativo de referência, foi realizada uma análise adicional utilizando o critério:
+
+\[
+p < 0,05
+\quad \text{e} \quad
+|\log_2FC| > 1
+\]
+
+Neste caso, foram utilizadas as **listas completas de genes que satisfizeram o critério em cada dataset**, sem restringir previamente a análise ao universo comum testável.
+
+Essa estratégia é diferente da análise principal deste trabalho, pois utiliza significância nominal em vez de FDR.
+
+```{r venn-article-like, fig.cap="Interseção das listas completas de genes identificados com p < 0,05 e |log2FC| > 1 nos três datasets. Esse critério foi utilizado exclusivamente para comparação com a estratégia apresentada no artigo de referência."}
 show_figure(
-  integration_plot_path("venn_sensitivity_AD_HD_PD.png")
+  integration_plot_path("venn_article_like_nominal_AD_HD_PD.png")
 )
 ```
 
-A análise de sensibilidade mantém FDR < 0,05, mas exige maior magnitude de efeito. Ela permite avaliar se o compartilhamento observado permanece quando são considerados apenas efeitos mais fortes.
+As listas completas obtidas pelo nosso DESeq2 continham:
 
-## 8.5 Concordância dos efeitos — HD versus PD
+- AD: **`r fmt_int(get_integration("article_like_AD"))` genes**;
+- HD: **`r fmt_int(get_integration("article_like_HD"))` genes**;
+- PD: **`r fmt_int(get_integration("article_like_PD"))` genes**.
 
-```{r hd-pd-effect, fig.cap="Relação entre os log2FoldChanges de HD e PD no universo comum testável."}
-show_figure(
-  integration_plot_path("log2FC_HD_vs_PD.png")
+O diagrama mostrou 35 genes exclusivos de AD, 537 exclusivos de HD, 374 exclusivos de PD, 7 genes compartilhados apenas entre AD e HD, 2 compartilhados apenas entre AD e PD, 149 compartilhados apenas entre HD e PD e 8 genes presentes na interseção das três doenças.
+
+Considerando também os oito genes da interseção tripla, o compartilhamento total foi de 157 genes entre HD e PD, 15 entre AD e HD e 10 entre AD e PD.
+
+Novamente, a maior sobreposição ocorreu entre HD e PD.
+
+### Comparação com o artigo
+
+```{r article-like-comparison}
+comparison_article_like <- tibble::tibble(
+  Dataset = c("AD", "HD", "PD"),
+  `Artigo: p<0,05 + |log2FC|>1` = c(262, 1581, 537),
+  `Nosso DESeq2: p<0,05 + |log2FC|>1` = c(
+    get_integration("article_like_AD"),
+    get_integration("article_like_HD"),
+    get_integration("article_like_PD")
+  ),
+  `Nosso DESeq2: FDR<0,05 + |log2FC|>1` = c(
+    get_de("AD", "n_DEG_sensitivity"),
+    get_de("HD", "n_DEG_sensitivity"),
+    get_de("PD", "n_DEG_sensitivity")
+  )
+)
+
+kable(
+  comparison_article_like,
+  caption = "Comparação entre o critério nominal apresentado no artigo, o mesmo cutoff aplicado aos resultados do nosso DESeq2 e a análise de sensibilidade baseada em FDR."
 )
 ```
 
-A correlação de Spearman entre HD e PD foi:
+Embora o mesmo cutoff nominal tenha sido aplicado aos resultados do nosso DESeq2, isso **não torna as duas análises metodologicamente idênticas**, pois os pipelines de processamento e modelagem estatística são diferentes.
+
+Ainda assim, a comparação é informativa. Para PD, o número de genes foi muito semelhante: 537 no artigo versus 533 no nosso DESeq2. Em HD, foram observados 1.581 genes no artigo e 701 no nosso processamento. A maior diferença ocorreu em AD, com 262 genes relatados no artigo e 52 identificados pelo nosso DESeq2 utilizando o mesmo cutoff nominal.
+
+Apesar dessas diferenças quantitativas, a estrutura da interseção manteve maior compartilhamento entre HD e PD, e **oito genes foram compartilhados pelas três doenças no nosso resultado nominal**.
+
+Essa análise deve ser considerada **comparativa e exploratória** e não substitui os resultados principais definidos por FDR.
+
+
+
+## 8.5 Comparação pareada entre HD e PD
+
+As análises anteriores mostraram que HD e PD apresentavam a maior convergência gênica.
+
+Por esse motivo, foi realizada uma análise adicional específica entre essas duas doenças.
+
+Diferentemente da integração simultânea AD–HD–PD, essa comparação não precisa ser limitada pelos genes disponíveis em AD.
+
+Foi então definido o universo pareado:
 
 \[
-\rho = `r fmt_num(get_rho("HD-PD"), 3)`
+U_{HD}^{testável}
+\cap
+U_{PD}^{testável}
+=
+`r fmt_int(get_integration("hd_pd_pairwise_universe"))`
+\text{ genes}
 \]
 
-indicando **concordância positiva moderada** entre os efeitos de expressão.
+Portanto, **`r fmt_int(get_integration("hd_pd_pairwise_universe"))` genes puderam ser diretamente comparados entre HD e PD**.
 
-Em contraste:
+Esse universo é maior que o universo triplo de `r fmt_int(get_integration("common_testable_universe"))` genes porque inclui genes testáveis em HD e PD mesmo quando eles não eram testáveis em AD.
+
+### Concordância dos efeitos de expressão
+
+```{r hd-pd-effect, fig.cap="Relação entre os log2FoldChanges de HD e PD no universo pareado HD∩PD. As linhas tracejadas indicam log2FC = 0, enquanto a diagonal y=x representa igualdade de magnitude dos efeitos entre as duas doenças."}
+show_figure(
+  integration_plot_path("log2FC_HD_vs_PD_pairwise.png")
+)
+```
+
+A correlação de Spearman entre os `log2FoldChange` de HD e PD foi:
 
 \[
-\rho_{AD,HD} = `r fmt_num(get_rho("AD-HD"), 3)`
+\rho =
+`r fmt_num(get_rho("HD-PD"), 3)`
 \]
 
-e
+considerando:
 
 \[
-\rho_{AD,PD} = `r fmt_num(get_rho("AD-PD"), 3)`.
+n =
+`r fmt_int(get_corr_n("HD-PD"))`
 \]
 
-Assim, a concordância global gene a gene foi muito maior entre HD e PD do que nas comparações envolvendo AD.
+genes.
 
-A ausência de correlação gênica forte envolvendo AD não contradiz a presença de convergência funcional, pois doenças distintas podem alterar genes diferentes pertencentes aos mesmos processos biológicos.
+Esse resultado indica uma **associação positiva moderada entre os efeitos transcriptômicos das duas doenças**.
 
-## 8.6 Genes direcionalmente concordantes
+Genes com `log2FoldChange` de mesmo sinal aparecem predominantemente nos quadrantes superior direito e inferior esquerdo, enquanto genes com efeitos opostos ocupam os quadrantes restantes.
 
-Foram identificados **`r fmt_int(get_integration("directionally_concordant_all_three"))` genes** com o mesmo sinal de `log2FoldChange` nas três doenças.
+A linha diagonal `y = x` representa igualdade entre as magnitudes dos efeitos em HD e PD. A proximidade de um gene à diagonal indica efeitos quantitativamente semelhantes nas duas doenças, enquanto a distância indica diferenças de magnitude.
 
-Esse número não representa DEGs transdiagnósticos, pois concordância de direção foi calculada independentemente da significância estatística.
+### DEGs compartilhados entre HD e PD
+
+No universo pareado foram identificados:
+
+\[
+`r fmt_int(get_integration("pairwise_HD_PD_shared_primary"))`
+\]
+
+genes classificados como DEGs tanto em HD quanto em PD.
+
+Desses:
+
+\[
+`r fmt_int(get_integration("pairwise_HD_PD_shared_same_direction"))`
+\]
+
+apresentaram a mesma direção de efeito, enquanto apenas:
+
+\[
+`r fmt_int(get_integration("pairwise_HD_PD_shared_opposite_direction"))`
+\]
+
+apresentaram direções opostas.
+
+Isso corresponde a aproximadamente:
+
+\[
+`r fmt_num(
+  100 *
+  get_integration("pairwise_HD_PD_shared_same_direction") /
+  get_integration("pairwise_HD_PD_shared_primary"),
+  1
+)`\%
+\]
+
+dos DEGs compartilhados apresentando concordância direcional.
+
+É importante distinguir esse resultado da correlação global.
+
+A correlação de Spearman é calculada utilizando **todos os `r fmt_int(get_corr_n("HD-PD"))` genes do universo pareado**, incluindo genes com efeitos pequenos ou próximos de zero.
+
+Já a concordância de direção de aproximadamente 99% refere-se apenas ao subconjunto de **`r fmt_int(get_integration("pairwise_HD_PD_shared_primary"))` genes classificados como DEGs nas duas doenças**.
+
+Portanto, uma correlação global moderada pode coexistir com uma concordância direcional muito elevada entre os genes diferencialmente expressos compartilhados.
+
+A diferença entre os **`r fmt_int(get_integration("common_primary_HD_PD"))` DEGs HD–PD observados no universo comum às três doenças** e os **`r fmt_int(get_integration("pairwise_HD_PD_shared_primary"))` DEGs compartilhados no universo pareado** decorre exclusivamente da definição do universo de comparação.
+
+No primeiro caso, o gene precisava ser testável em AD, HD e PD. No segundo, precisava ser testável apenas em HD e PD.
+
+### Correlação entre os três pares de doenças
+
+As correlações de Spearman foram:
+
+- AD × HD: **ρ = `r fmt_num(get_rho("AD-HD"), 3)`**, com `n = `r fmt_int(get_corr_n("AD-HD"))`` genes;
+- AD × PD: **ρ = `r fmt_num(get_rho("AD-PD"), 3)`**, com `n = `r fmt_int(get_corr_n("AD-PD"))`` genes;
+- HD × PD: **ρ = `r fmt_num(get_rho("HD-PD"), 3)`**, com `n = `r fmt_int(get_corr_n("HD-PD"))`` genes.
+
+A associação global foi, portanto, consideravelmente maior entre HD e PD.
+
+AD apresentou associação positiva fraca com HD e praticamente nenhuma associação global com PD no nível gene-a-gene.
+
+
+
+## 8.6 Concordância direcional entre as três doenças
+
+Além da classificação formal de DEG, foi investigado se os genes apresentavam a mesma direção de efeito nas três doenças.
+
+Foram identificados:
+
+\[
+`r fmt_int(get_integration("directionally_concordant_all_three"))`
+\]
+
+genes com o mesmo sinal de `log2FoldChange` em AD, HD e PD dentro do universo comum testável.
+
+Esse número **não representa DEGs compartilhados entre as três doenças**.
+
+A análise considera apenas a direção do efeito (`log2FC > 0` ou `log2FC < 0`), independentemente de o gene atingir significância estatística.
+
+Assim, essa análise permite detectar tendências transcriptômicas compartilhadas que podem envolver efeitos pequenos ou variáveis demais para atingir individualmente os critérios de DEG.
+
+
 
 ## 8.7 GSEA compartilhado — GO Biological Process
 
-```{r shared-gsea-go, fig.cap="Termos GO Biological Process significativamente enriquecidos em pelo menos duas doenças e respectivos NES."}
+```{r shared-gsea-go, fig.cap="Termos GO Biological Process significativamente enriquecidos em pelo menos duas doenças e respectivos valores de NES."}
 show_figure(
   integration_plot_path("shared_GSEA_GO_BP.png")
 )
 ```
 
-A integração de GO BP revelou forte convergência funcional.
+A integração dos resultados de GSEA revelou convergência funcional substancial entre as três doenças.
 
-Entre os processos com **NES positivo nas três doenças** destacaram-se:
+Entre os processos que apresentaram **NES positivo nas três doenças** destacaram-se:
 
 - resposta imune adaptativa;
 - resposta imune humoral;
@@ -1087,57 +1342,71 @@ Entre os processos com **NES positivo nas três doenças** destacaram-se:
 - ativação do complemento;
 - via clássica do complemento;
 - processamento e apresentação de antígenos;
-- apresentação de antígenos via MHC classe II;
+- apresentação antigênica via MHC classe II;
 - resposta e detoxificação relacionadas a metais.
 
-Em contraste, processos relacionados à:
+Em contraste, processos relacionados à modulação da transmissão sináptica química e à regulação da sinalização trans-sináptica apresentaram **NES negativo nas três doenças**.
 
-- modulação da transmissão sináptica química;
-- regulação da sinalização trans-sináptica;
+Esse resultado mostra que a convergência funcional pode ser mais evidente que a convergência baseada exclusivamente em DEGs individuais.
 
-apresentaram **NES negativo nas três doenças**.
+Essa observação é especialmente importante em AD. Apesar da ausência de DEGs pelo critério principal, conjuntos inteiros de genes envolvidos em processos imunológicos e neuronais apresentaram deslocamentos coordenados ao longo do ranking de expressão diferencial.
 
-Esse resultado fornece evidência de que a convergência entre AD, HD e PD é mais evidente no nível funcional do que na interseção estrita de genes individuais.
+Também foram observados processos com comportamento divergente entre as doenças. `Extracellular matrix organization`, `extracellular structure organization`, `external encapsulating structure organization` e `cell-substrate adhesion`, por exemplo, apresentaram NES negativo em AD e positivo em HD e PD.
 
-Também foram observados processos divergentes. Organização da matriz extracelular, organização de estruturas extracelulares e adesão célula-substrato apresentaram NES negativo em AD e positivo em HD e PD, sugerindo componentes específicos ou diferencialmente regulados entre as doenças.
+Esses resultados sugerem que, além de processos compartilhados, existem componentes funcionais potencialmente específicos ou diferencialmente regulados entre as doenças.
+
+
 
 ## 8.8 GSEA compartilhado — KEGG
 
-```{r shared-gsea-kegg, fig.cap="Vias KEGG significativamente enriquecidas em pelo menos duas doenças e respectivos NES."}
+```{r shared-gsea-kegg, fig.cap="Vias KEGG significativamente enriquecidas em pelo menos duas doenças e respectivos valores de NES."}
 show_figure(
   integration_plot_path("shared_GSEA_KEGG.png")
 )
 ```
 
-A análise KEGG reforçou o eixo imunológico compartilhado.
+A integração das vias KEGG reforçou a existência de um eixo imunológico compartilhado.
 
-Entre as vias positivas nas três doenças destacaram-se:
+Entre as vias com NES positivo nas três doenças destacaram-se:
 
 - complemento e coagulação;
 - processamento e apresentação de antígenos;
 - linhagem hematopoiética;
-- categorias autoimunes/inflamatórias;
-- categorias infecciosas que compartilham módulos de resposta imune.
+- categorias relacionadas a respostas autoimunes;
+- categorias relacionadas a respostas infecciosas.
 
-Esses termos não foram interpretados como presença literal das doenças nomeadas no KEGG, mas como consequência do compartilhamento de genes de imunidade, complemento, MHC, citocinas e receptores.
+Esses termos não devem ser interpretados como evidência de que as amostras apresentavam literalmente as doenças ou infecções indicadas pelos nomes das vias.
 
-Também foram identificados componentes divergentes, como `Cytoskeleton in muscle cells` e `ATP-dependent chromatin remodeling`, com direção negativa em AD e positiva em HD/PD.
+O enriquecimento decorre do compartilhamento de genes associados a complemento, MHC, citocinas, receptores, ativação leucocitária e mecanismos gerais de resposta imune.
 
-## 8.9 Síntese da integração
+Também foram observados padrões divergentes. `Cytoskeleton in muscle cells` e `ATP-dependent chromatin remodeling`, por exemplo, apresentaram NES negativo em AD e positivo em HD e PD.
+
+Assim, a integração das vias KEGG reforça simultaneamente a presença de **mecanismos compartilhados** e **componentes específicos de cada doença**.
+
+
+
+## 8.9 Síntese da integração transdiagnóstica
 
 <div class="result-box">
 
-A integração revelou três níveis distintos de relação entre as doenças:
+A integração transcriptômica revelou que a relação entre AD, HD e PD depende do nível de análise considerado.
 
-**1. Convergência gênica:** mais evidente entre HD e PD, com compartilhamento de DEGs e correlação moderada dos efeitos.
+**Comparabilidade transdiagnóstica.** A interseção dos universos testáveis resultou em `r fmt_int(get_integration("common_testable_universe"))` genes que puderam ser diretamente comparados nas três doenças.
 
-**2. Convergência funcional:** presente nas três doenças, incluindo AD, caracterizada principalmente por enriquecimento positivo de processos imunológicos e enriquecimento negativo de processos sinápticos.
+**Convergência gênica.** A maior sobreposição ocorreu entre HD e PD. No universo pareado de `r fmt_int(get_integration("hd_pd_pairwise_universe"))` genes, foram encontrados `r fmt_int(get_integration("pairwise_HD_PD_shared_primary"))` DEGs compartilhados, dos quais aproximadamente `r fmt_num(100 * get_integration("pairwise_HD_PD_shared_same_direction") / get_integration("pairwise_HD_PD_shared_primary"), 1)`% apresentaram a mesma direção de efeito.
 
-**3. Divergência funcional:** alguns processos, especialmente relacionados à matriz extracelular, adesão e componentes estruturais, apresentaram direções diferentes em AD versus HD/PD.
+**Concordância global.** Os efeitos transcriptômicos de HD e PD apresentaram correlação positiva moderada (`Spearman ρ = `r fmt_num(get_rho("HD-PD"), 3)``), enquanto AD apresentou associação fraca com HD e praticamente nula com PD no nível gene-a-gene.
+
+**Convergência funcional.** Apesar das diferenças observadas no nível de genes individuais, as três doenças apresentaram enriquecimento positivo recorrente de processos relacionados à resposta imune, complemento, citocinas e apresentação antigênica, acompanhado por enriquecimento negativo de processos relacionados à transmissão e sinalização sináptica.
+
+**Divergência funcional.** Processos relacionados à matriz extracelular, adesão e determinados componentes estruturais apresentaram direções diferentes entre AD e HD/PD, indicando que a convergência transdiagnóstica não é uniforme.
+
+**Comparação nominal com a literatura.** Quando foi utilizado o critério `p < 0,05` e `|log2FC| > 1` nas listas completas, foram identificados `r fmt_int(get_integration("article_like_AD_HD_PD"))` genes compartilhados pelas três doenças. Essa análise é comparativa e exploratória e não substitui o critério principal baseado em FDR.
+
+Em conjunto, os resultados indicam que a convergência entre AD, HD e PD é mais robusta no nível de **processos biológicos coordenados** do que na sobreposição estrita de genes diferencialmente expressos.
 
 </div>
 
----
 
 # 9. Relação com a futura deconvolução celular
 
@@ -1165,7 +1434,7 @@ Da mesma forma, redução de genes sinápticos pode refletir diminuição da fra
 
 A próxima etapa do projeto utilizará deconvolução celular para investigar essa questão, empregando uma referência de snRNA-seq e múltiplos algoritmos independentes.
 
----
+
 
 # 10. Limitações
 
@@ -1183,7 +1452,7 @@ Quinto, bulk RNA-seq mistura sinais provenientes de múltiplos tipos celulares. 
 
 Por fim, a fase atual utiliza matrizes de contagens disponibilizadas publicamente. Em uma etapa posterior, os dados serão reprocessados de forma padronizada a partir das leituras brutas, permitindo avaliar a influência das decisões de quantificação e processamento.
 
----
+
 
 # 11. Conclusão da Fase 01
 
@@ -1191,7 +1460,7 @@ A análise padronizada das matrizes de contagens revelou comportamentos distinto
 
 AD não apresentou DEGs segundo o critério principal, enquanto HD e PD apresentaram **`r fmt_int(get_de("HD", "n_DEG_primary"))`** e **`r fmt_int(get_de("PD", "n_DEG_primary"))`** DEGs, respectivamente.
 
-A integração gênica identificou **`r fmt_int(get_integration("primary_HD_PD"))` DEGs compartilhados entre HD e PD** dentro do universo comum testável de **`r fmt_int(get_integration("common_testable_universe"))` genes**. A concordância dos efeitos entre HD e PD foi moderada (`Spearman ρ = `r fmt_num(get_rho("HD-PD"), 3)`), enquanto as comparações envolvendo AD apresentaram correlação global baixa.
+No universo comum testável de **`r fmt_int(get_integration("common_testable_universe"))` genes**, foram observados **`r fmt_int(get_integration("common_primary_HD_PD"))` DEGs compartilhados entre HD e PD**. Quando a comparação HD–PD foi realizada no universo pareado apropriado de **`r fmt_int(get_integration("hd_pd_pairwise_universe"))` genes**, a sobreposição aumentou para **`r fmt_int(get_integration("pairwise_HD_PD_shared_primary"))` DEGs compartilhados**, dos quais **`r fmt_int(get_integration("pairwise_HD_PD_shared_same_direction"))`** apresentaram a mesma direção do efeito. A correlação global dos efeitos entre HD e PD foi moderada (`Spearman ρ = `r fmt_num(get_rho("HD-PD"), 3)``), enquanto as comparações envolvendo AD apresentaram associação fraca ou praticamente nula no nível gene-a-gene.
 
 Apesar disso, a integração por GSEA revelou uma assinatura funcional transdiagnóstica consistente. Processos relacionados à resposta imune, citocinas, quimiocinas, complemento e apresentação antigênica apresentaram enriquecimento positivo recorrente, enquanto processos relacionados à transmissão e sinalização sináptica apresentaram enriquecimento negativo nas três doenças.
 
@@ -1201,4 +1470,25 @@ Assim, a principal conclusão da Fase 01 é que:
 
 Esse achado fornece a base para a próxima etapa do projeto, na qual a deconvolução celular será utilizada para investigar em que medida o eixo imunológico positivo e o eixo neuronal negativo estão associados a alterações na composição celular do tecido ou a mudanças transcriptômicas dentro dos próprios tipos celulares.
 
----
+
+
+# 12. Reprodutibilidade
+
+Este relatório consome resultados produzidos sequencialmente pelos scripts:
+
+```text
+00_audit_raw_data.R
+01_prepare_metadata.R
+02_prepare_counts.R
+03_harmonize_genes.R
+04_qc_counts.R
+05_deseq2.R
+06_pathway_enrichment.R
+07_cross_disease_integration.R
+```
+
+O relatório não recalcula as análises principais; ele apenas lê as tabelas e figuras previamente produzidas pelo pipeline.
+
+```{r session-info}
+sessionInfo()
+```
