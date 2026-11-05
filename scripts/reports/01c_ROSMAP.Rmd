@@ -1,0 +1,2781 @@
+---
+title: "Relatório da Fase 01c: Auditoria, análise e seleção do ROSMAP como coorte principal de Alzheimer"
+author: "Pipeline RNA-Seq Neurodegenerativo"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: false
+    code_folding: hide
+    df_print: paged
+    self_contained: true
+---
+
+<style>
+body {
+  font-size: 16px;
+  line-height: 1.58;
+}
+h1 {
+  margin-top: 1.35em;
+  border-bottom: 2px solid #e5e7eb;
+  padding-bottom: 0.18em;
+}
+h2 {
+  margin-top: 1.2em;
+}
+h3 {
+  margin-top: 1.0em;
+}
+table {
+  width: 100% !important;
+  margin: 1.2em auto 1.6em auto !important;
+  border-collapse: collapse;
+}
+th, td {
+  padding: 8px 10px !important;
+  vertical-align: middle !important;
+}
+blockquote {
+  border-left: 4px solid #7B2CBF;
+  padding-left: 1em;
+  color: #374151;
+}
+.figure {
+  margin-top: 1.4em;
+  margin-bottom: 1.8em;
+}
+.caption {
+  margin-top: 0.5em;
+  color: #4b5563;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  out.width = "92%"
+)
+
+options(
+  stringsAsFactors = FALSE,
+  scipen = 999
+)
+
+required_packages <- c(
+  "data.table",
+  "knitr"
+)
+
+missing_packages <- required_packages[
+  !vapply(
+    required_packages,
+    requireNamespace,
+    logical(1),
+    quietly = TRUE
+  )
+]
+
+if (length(missing_packages) > 0) {
+  stop(
+    "Pacotes necessários não instalados: ",
+    paste(
+      missing_packages,
+      collapse = ", "
+    )
+  )
+}
+
+suppressPackageStartupMessages({
+  library(data.table)
+  library(knitr)
+})
+
+# ==============================================================================
+# LOCALIZAR A RAIZ DO PROJETO
+# ==============================================================================
+#
+# O relatório pode ser renderizado da raiz do repositório ou diretamente da
+# pasta scripts/reports. A função abaixo sobe diretórios até localizar:
+#
+#   results/candidate_ROSMAP/
+#
+# Isso evita dependência excessiva do diretório de trabalho do knit.
+# ==============================================================================
+
+find_project_root <- function(
+  start = getwd(),
+  max_up = 8L
+) {
+
+  current <- normalizePath(
+    start,
+    winslash = "/",
+    mustWork = TRUE
+  )
+
+  for (i in 0:max_up) {
+
+    if (
+      dir.exists(
+        file.path(
+          current,
+          "results",
+          "candidate_ROSMAP"
+        )
+      )
+    ) {
+      return(current)
+    }
+
+    parent <- normalizePath(
+      file.path(
+        current,
+        ".."
+      ),
+      winslash = "/",
+      mustWork = TRUE
+    )
+
+    if (identical(
+      parent,
+      current
+    )) {
+      break
+    }
+
+    current <- parent
+  }
+
+  stop(
+    paste0(
+      "Não foi possível localizar a raiz do projeto a partir de: ",
+      start,
+      "\nEsperava-se encontrar results/candidate_ROSMAP/."
+    )
+  )
+}
+
+PROJECT_ROOT <- find_project_root()
+
+# Fazer todos os caminhos relativos do knit partirem da raiz real do projeto.
+# As figuras são incluídas com rel_path = FALSE para que o Pandoc consiga
+# incorporá-las corretamente no HTML self-contained, mesmo quando o relatório
+# é gravado em reports/.
+knitr::opts_knit$set(
+  root.dir = PROJECT_ROOT
+)
+
+# ==============================================================================
+# DIRETÓRIOS PRINCIPAIS
+# ==============================================================================
+
+rosmap_dir <- file.path(
+  PROJECT_ROOT,
+  "results",
+  "candidate_ROSMAP"
+)
+
+audit_dir <- file.path(
+  rosmap_dir,
+  "audit"
+)
+
+metadata_dir <- file.path(
+  rosmap_dir,
+  "metadata"
+)
+
+counts_dir <- file.path(
+  rosmap_dir,
+  "counts"
+)
+
+harmonization_dir <- file.path(
+  rosmap_dir,
+  "harmonization"
+)
+
+qc_dir <- file.path(
+  rosmap_dir,
+  "qc"
+)
+
+deseq_dir <- file.path(
+  rosmap_dir,
+  "deseq2"
+)
+
+enrichment_dir <- file.path(
+  rosmap_dir,
+  "enrichment"
+)
+
+comparison_dir <- file.path(
+  rosmap_dir,
+  "comparison_GSE125583"
+)
+
+final_integration_dir <- file.path(
+  rosmap_dir,
+  "final_integration_AD_HD_PD"
+)
+
+final_tables_dir <- file.path(
+  final_integration_dir,
+  "tables"
+)
+
+final_validation_dir <- file.path(
+  final_integration_dir,
+  "ROSMAP_validation"
+)
+
+final_plot_dir <- file.path(
+  final_integration_dir,
+  "plots"
+)
+
+gse125583_dir <- file.path(
+  PROJECT_ROOT,
+  "results",
+  "candidate_GSE125583"
+)
+
+# ==============================================================================
+# FUNÇÕES AUXILIARES
+# ==============================================================================
+
+fmt_int <- function(x) {
+
+  if (
+    length(x) == 0 ||
+    is.na(x)
+  ) {
+    return("NA")
+  }
+
+  format(
+    as.integer(
+      round(
+        as.numeric(x)
+      )
+    ),
+    big.mark = ".",
+    decimal.mark = ",",
+    scientific = FALSE,
+    trim = TRUE
+  )
+}
+
+
+fmt_num <- function(
+  x,
+  digits = 2
+) {
+
+  if (
+    length(x) == 0 ||
+    is.na(x)
+  ) {
+    return("NA")
+  }
+
+  format(
+    round(
+      as.numeric(x),
+      digits
+    ),
+    nsmall = digits,
+    big.mark = ".",
+    decimal.mark = ",",
+    scientific = FALSE,
+    trim = TRUE
+  )
+}
+
+
+fmt_p <- function(x) {
+
+  if (
+    length(x) == 0 ||
+    is.na(x)
+  ) {
+    return("NA")
+  }
+
+  if (x < 0.001) {
+    return(
+      format(
+        x,
+        scientific = TRUE,
+        digits = 3
+      )
+    )
+  }
+
+  fmt_num(
+    x,
+    4
+  )
+}
+
+
+safe_cor <- function(
+  x,
+  y,
+  method = "spearman"
+) {
+
+  ok <- is.finite(x) & is.finite(y)
+
+  if (sum(ok) < 3) {
+    return(NA_real_)
+  }
+
+  suppressWarnings(
+    cor(
+      x[ok],
+      y[ok],
+      method = method
+    )
+  )
+}
+
+
+report_table <- function(
+  x,
+  caption = NULL,
+  digits = NULL
+) {
+
+  if (
+    is.null(x) ||
+    nrow(x) == 0
+  ) {
+    cat(
+      "\n*Tabela não disponível nesta execução.*\n"
+    )
+    return(
+      invisible(NULL)
+    )
+  }
+
+  # Converter explicitamente para data.frame evita comportamentos inesperados
+  # de métodos específicos de data.table durante a formatação pelo knitr.
+  x <- as.data.frame(
+    x,
+    check.names = FALSE
+  )
+
+  # Não repassar digits = NULL para knitr::kable().
+  # Em algumas versões do knitr isso pode chegar às rotinas de arredondamento
+  # como argumento inválido para colunas numéricas.
+  kable_args <- list(
+    x = x,
+    format = "html",
+    caption = caption,
+    align = rep(
+      "c",
+      ncol(x)
+    )
+  )
+
+  if (!is.null(digits)) {
+    kable_args$digits <- digits
+  }
+
+  do.call(
+    knitr::kable,
+    kable_args
+  )
+}
+
+
+read_optional <- function(
+  path,
+  ...
+) {
+
+  if (!file.exists(path)) {
+    return(NULL)
+  }
+
+  fread(
+    path,
+    ...
+  )
+}
+
+
+first_existing <- function(paths) {
+
+  hit <- paths[
+    file.exists(paths)
+  ]
+
+  if (length(hit) == 0) {
+    return(NA_character_)
+  }
+
+  hit[1]
+}
+
+
+# ------------------------------------------------------------------------------
+# Localização robusta de figuras
+# ------------------------------------------------------------------------------
+#
+# Na Fase 01b alguns PNGs foram salvos em subdiretórios diferentes ao longo das
+# versões do pipeline. Para evitar repetir esse problema, este relatório procura
+# as figuras recursivamente dentro de candidate_ROSMAP e usa nomes explícitos
+# quando eles são conhecidos.
+# ------------------------------------------------------------------------------
+
+find_plot <- function(
+  directory,
+  alternatives,
+  exclude_patterns = character()
+) {
+
+  if (!dir.exists(directory)) {
+    return(NA_character_)
+  }
+
+  files <- list.files(
+    directory,
+    pattern = "\\.(png|jpg|jpeg)$",
+    full.names = TRUE,
+    recursive = TRUE,
+    ignore.case = TRUE
+  )
+
+  if (length(files) == 0) {
+    return(NA_character_)
+  }
+
+  base <- basename(files)
+
+  for (patterns in alternatives) {
+
+    keep <- rep(
+      TRUE,
+      length(files)
+    )
+
+    for (pattern in patterns) {
+      keep <- keep &
+        grepl(
+          pattern,
+          base,
+          ignore.case = TRUE,
+          perl = TRUE
+        )
+    }
+
+    for (pattern in exclude_patterns) {
+      keep <- keep &
+        !grepl(
+          pattern,
+          base,
+          ignore.case = TRUE,
+          perl = TRUE
+        )
+    }
+
+    hits <- files[keep]
+
+    if (length(hits) > 0) {
+
+      hits <- hits[
+        order(
+          nchar(hits),
+          hits
+        )
+      ]
+
+      return(
+        hits[1]
+      )
+    }
+  }
+
+  NA_character_
+}
+
+
+include_if_exists <- function(
+  path,
+  width = "92%"
+) {
+
+  if (
+    length(path) == 0 ||
+    is.na(path) ||
+    !file.exists(path)
+  ) {
+
+    cat(
+      "\n*Figura não encontrada no diretório de resultados desta execução.*\n"
+    )
+
+    return(
+      invisible(NULL)
+    )
+  }
+
+  knitr::include_graphics(
+    normalizePath(
+      path,
+      winslash = "/",
+      mustWork = TRUE
+    ),
+    rel_path = FALSE
+  )
+}
+
+
+# ==============================================================================
+# ARQUIVOS PRINCIPAIS
+# ==============================================================================
+
+synapse_manifest_file <- file.path(
+  audit_dir,
+  "00_synapse_manifest.tsv"
+)
+
+predefined_criteria_file <- file.path(
+  audit_dir,
+  "00_predefined_selection_criteria.tsv"
+)
+
+metadata_file <- file.path(
+  metadata_dir,
+  "metadata_ROSMAP.tsv"
+)
+
+metadata_summary_file <- file.path(
+  metadata_dir,
+  "metadata_ROSMAP_summary.tsv"
+)
+
+harmonization_summary_file <- file.path(
+  harmonization_dir,
+  "gene_mapping_ROSMAP_summary.tsv"
+)
+
+harmonization_balance_file <- file.path(
+  harmonization_dir,
+  "harmonization_count_balance.tsv"
+)
+
+filter_summary_file <- file.path(
+  qc_dir,
+  "gene_filter_summary_ROSMAP.tsv"
+)
+
+qc_group_tests_file <- file.path(
+  qc_dir,
+  "qc_group_tests_ROSMAP.tsv"
+)
+
+pca_variance_file <- file.path(
+  qc_dir,
+  "pca_variance_ROSMAP.tsv"
+)
+
+deseq_main_file <- file.path(
+  deseq_dir,
+  "ROSMAP_deseq2_results.tsv"
+)
+
+deseq_adjusted_file <- file.path(
+  deseq_dir,
+  "ROSMAP_deseq2_results_adjusted.tsv"
+)
+
+enrichment_summary_file <- file.path(
+  enrichment_dir,
+  "ROSMAP_enrichment_summary.tsv"
+)
+
+functional_stability_file <- file.path(
+  enrichment_dir,
+  "model_comparison",
+  "ROSMAP_functional_stability_summary.tsv"
+)
+
+candidate_gene_summary_file <- file.path(
+  comparison_dir,
+  "gene_level",
+  "AD_candidate_gene_concordance_summary.tsv"
+)
+
+candidate_stability_file <- file.path(
+  comparison_dir,
+  "gene_level",
+  "AD_candidates_within_dataset_stability.tsv"
+)
+
+candidate_functional_file <- file.path(
+  comparison_dir,
+  "functional",
+  "AD_candidate_GSEA_concordance_summary.tsv"
+)
+
+candidate_criteria_file <- file.path(
+  comparison_dir,
+  "AD_candidate_predefined_criteria_summary.tsv"
+)
+
+final_universe_file <- file.path(
+  final_tables_dir,
+  "final_testable_universe_summary.tsv"
+)
+
+final_integration_summary_file <- file.path(
+  final_tables_dir,
+  "final_AD_HD_PD_integration_summary.tsv"
+)
+
+final_pairwise_file <- file.path(
+  final_tables_dir,
+  "final_pairwise_overlap_summary.tsv"
+)
+
+final_regions_file <- file.path(
+  final_tables_dir,
+  "final_threeway_regions.tsv"
+)
+
+final_validation_summary_file <- file.path(
+  final_validation_dir,
+  "ROSMAP_validation_summary.tsv"
+)
+
+final_validation_genes_file <- file.path(
+  final_validation_dir,
+  "ROSMAP_validation_transdiagnostic_AD_genes.tsv"
+)
+
+# ==============================================================================
+# ARQUIVOS OBRIGATÓRIOS PARA O RELATÓRIO
+# ==============================================================================
+
+required_files <- c(
+  metadata_file,
+  deseq_main_file,
+  deseq_adjusted_file,
+  candidate_gene_summary_file,
+  candidate_stability_file,
+  candidate_functional_file
+)
+
+missing_files <- required_files[
+  !file.exists(required_files)
+]
+
+if (length(missing_files) > 0) {
+
+  stop(
+    paste0(
+      "Arquivos essenciais para o relatório não encontrados:\n",
+      paste(
+        paste0(
+          " - ",
+          missing_files
+        ),
+        collapse = "\n"
+      )
+    )
+  )
+}
+
+# ==============================================================================
+# CARREGAR DADOS
+# ==============================================================================
+
+metadata <- fread(
+  metadata_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+deseq_main <- fread(
+  deseq_main_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+deseq_adjusted <- fread(
+  deseq_adjusted_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+synapse_manifest <- read_optional(
+  synapse_manifest_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+predefined_criteria <- read_optional(
+  predefined_criteria_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+metadata_summary <- read_optional(
+  metadata_summary_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+harmonization_summary <- read_optional(
+  harmonization_summary_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+harmonization_balance <- read_optional(
+  harmonization_balance_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+filter_summary <- read_optional(
+  filter_summary_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+qc_group_tests <- read_optional(
+  qc_group_tests_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+pca_variance <- read_optional(
+  pca_variance_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+enrichment_summary <- read_optional(
+  enrichment_summary_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+functional_stability <- read_optional(
+  functional_stability_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+candidate_gene_summary <- fread(
+  candidate_gene_summary_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+candidate_stability <- fread(
+  candidate_stability_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+candidate_functional <- fread(
+  candidate_functional_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+candidate_criteria <- read_optional(
+  candidate_criteria_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+final_universe <- read_optional(
+  final_universe_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+final_integration_summary <- read_optional(
+  final_integration_summary_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+final_pairwise <- read_optional(
+  final_pairwise_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+final_regions <- read_optional(
+  final_regions_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+final_validation_summary <- read_optional(
+  final_validation_summary_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+final_validation_genes <- read_optional(
+  final_validation_genes_file,
+  na.strings = c(
+    "NA",
+    ""
+  )
+)
+
+# ==============================================================================
+# MÉTRICAS CALCULADAS DIRETAMENTE DOS RESULTADOS DESeq2
+# ==============================================================================
+
+ALPHA <- 0.05
+PRIMARY_LFC <- 0.58
+STRICT_LFC <- 1.00
+
+classify_de <- function(
+  dt,
+  lfc,
+  use_adjusted = TRUE
+) {
+
+  p_col <- if (use_adjusted) {
+    dt$padj
+  } else {
+    dt$pvalue
+  }
+
+  !is.na(p_col) &
+    p_col < ALPHA &
+    !is.na(dt$log2FoldChange) &
+    is.finite(dt$log2FoldChange) &
+    abs(dt$log2FoldChange) > lfc
+}
+
+main_primary <- classify_de(
+  deseq_main,
+  PRIMARY_LFC,
+  TRUE
+)
+
+main_strict <- classify_de(
+  deseq_main,
+  STRICT_LFC,
+  TRUE
+)
+
+main_nominal <- classify_de(
+  deseq_main,
+  STRICT_LFC,
+  FALSE
+)
+
+adjusted_primary <- classify_de(
+  deseq_adjusted,
+  PRIMARY_LFC,
+  TRUE
+)
+
+adjusted_strict <- classify_de(
+  deseq_adjusted,
+  STRICT_LFC,
+  TRUE
+)
+
+adjusted_nominal <- classify_de(
+  deseq_adjusted,
+  STRICT_LFC,
+  FALSE
+)
+
+main_primary_ids <- unique(
+  deseq_main$GeneID[
+    main_primary
+  ]
+)
+
+adjusted_primary_ids <- unique(
+  deseq_adjusted$GeneID[
+    adjusted_primary
+  ]
+)
+
+shared_primary_ids <- intersect(
+  main_primary_ids,
+  adjusted_primary_ids
+)
+
+union_primary_ids <- union(
+  main_primary_ids,
+  adjusted_primary_ids
+)
+
+deseq_common <- merge(
+  deseq_main[
+    ,
+    .(
+      GeneID,
+      log2FC_main = log2FoldChange
+    )
+  ],
+  deseq_adjusted[
+    ,
+    .(
+      GeneID,
+      log2FC_adjusted = log2FoldChange
+    )
+  ],
+  by = "GeneID",
+  all = FALSE
+)
+
+rho_main_adjusted <- safe_cor(
+  deseq_common$log2FC_main,
+  deseq_common$log2FC_adjusted,
+  "spearman"
+)
+
+pearson_main_adjusted <- safe_cor(
+  deseq_common$log2FC_main,
+  deseq_common$log2FC_adjusted,
+  "pearson"
+)
+
+shared_direction_dt <- deseq_common[
+  GeneID %in% shared_primary_ids
+]
+
+shared_same_direction <- sum(
+  sign(
+    shared_direction_dt$log2FC_main
+  ) ==
+    sign(
+      shared_direction_dt$log2FC_adjusted
+    )
+)
+
+shared_opposite_direction <- nrow(
+  shared_direction_dt
+) -
+  shared_same_direction
+
+primary_jaccard <- if (
+  length(
+    union_primary_ids
+  ) > 0
+) {
+  length(
+    shared_primary_ids
+  ) /
+    length(
+      union_primary_ids
+    )
+} else {
+  NA_real_
+}
+
+n_AD <- sum(
+  metadata$group == "AD",
+  na.rm = TRUE
+)
+
+n_Control <- sum(
+  metadata$group == "Control",
+  na.rm = TRUE
+)
+
+# ==============================================================================
+# FIGURAS — QC
+# ==============================================================================
+
+pca_group_plot <- find_plot(
+  qc_dir,
+  list(
+    c(
+      "pca",
+      "group"
+    ),
+    c(
+      "pca",
+      "diagn"
+    )
+  )
+)
+
+pca_batch_plot <- find_plot(
+  qc_dir,
+  list(
+    c(
+      "pca",
+      "batch"
+    ),
+    c(
+      "pca",
+      "sequencing"
+    )
+  )
+)
+
+library_plot <- find_plot(
+  qc_dir,
+  list(
+    c(
+      "library",
+      "group"
+    ),
+    c(
+      "library"
+    )
+  )
+)
+
+detected_plot <- find_plot(
+  qc_dir,
+  list(
+    c(
+      "detect",
+      "group"
+    ),
+    c(
+      "genes",
+      "detect"
+    )
+  )
+)
+
+# ==============================================================================
+# FIGURAS — DESeq2
+# ==============================================================================
+
+ma_plot <- first_existing(
+  c(
+    file.path(
+      deseq_dir,
+      "plots",
+      "MA_ROSMAP.png"
+    ),
+    find_plot(
+      deseq_dir,
+      list(
+        c(
+          "^MA",
+          "ROSMAP"
+        ),
+        c(
+          "^MA"
+        )
+      )
+    )
+  )
+)
+
+volcano_main_plot <- first_existing(
+  c(
+    file.path(
+      deseq_dir,
+      "plots",
+      "volcano_ROSMAP.png"
+    ),
+    find_plot(
+      deseq_dir,
+      list(
+        c(
+          "volcano",
+          "ROSMAP"
+        )
+      ),
+      exclude_patterns = c(
+        "adjust"
+      )
+    )
+  )
+)
+
+volcano_adjusted_plot <- first_existing(
+  c(
+    file.path(
+      deseq_dir,
+      "plots",
+      "volcano_ROSMAP_adjusted.png"
+    ),
+    find_plot(
+      deseq_dir,
+      list(
+        c(
+          "volcano",
+          "adjust"
+        )
+      )
+    )
+  )
+)
+
+heatmap_main_plot <- first_existing(
+  c(
+    file.path(
+      deseq_dir,
+      "plots",
+      "heatmap_ROSMAP_top50_primary.png"
+    ),
+    find_plot(
+      deseq_dir,
+      list(
+        c(
+          "heatmap",
+          "primary"
+        )
+      ),
+      exclude_patterns = c(
+        "adjust"
+      )
+    )
+  )
+)
+
+heatmap_adjusted_plot <- first_existing(
+  c(
+    file.path(
+      deseq_dir,
+      "plots",
+      "heatmap_ROSMAP_top50_primary_adjusted.png"
+    ),
+    find_plot(
+      deseq_dir,
+      list(
+        c(
+          "heatmap",
+          "adjust"
+        )
+      )
+    )
+  )
+)
+
+stability_plot <- first_existing(
+  c(
+    file.path(
+      deseq_dir,
+      "plots",
+      "log2FC_main_vs_adjusted_ROSMAP.png"
+    ),
+    find_plot(
+      deseq_dir,
+      list(
+        c(
+          "log2FC",
+          "main",
+          "adjust"
+        ),
+        c(
+          "stability"
+        )
+      )
+    )
+  )
+)
+
+dispersion_main_plot <- first_existing(
+  c(
+    file.path(
+      deseq_dir,
+      "plots",
+      "dispersion_ROSMAP_main.png"
+    ),
+    find_plot(
+      deseq_dir,
+      list(
+        c(
+          "dispersion",
+          "main"
+        )
+      )
+    )
+  )
+)
+
+dispersion_adjusted_plot <- first_existing(
+  c(
+    file.path(
+      deseq_dir,
+      "plots",
+      "dispersion_ROSMAP_adjusted.png"
+    ),
+    find_plot(
+      deseq_dir,
+      list(
+        c(
+          "dispersion",
+          "adjust"
+        )
+      )
+    )
+  )
+)
+
+# ==============================================================================
+# FIGURAS — ENRIQUECIMENTO
+# ==============================================================================
+
+ora_main_all_go_plot <- find_plot(
+  enrichment_dir,
+  list(
+    c(
+      "ora",
+      "go",
+      "main",
+      "all"
+    )
+  )
+)
+
+ora_main_down_go_plot <- find_plot(
+  enrichment_dir,
+  list(
+    c(
+      "ora",
+      "go",
+      "main",
+      "down"
+    )
+  )
+)
+
+ora_adjusted_down_kegg_plot <- find_plot(
+  enrichment_dir,
+  list(
+    c(
+      "ora",
+      "kegg",
+      "adjust",
+      "down"
+    )
+  )
+)
+
+gsea_main_go_plot <- find_plot(
+  enrichment_dir,
+  list(
+    c(
+      "gsea",
+      "go",
+      "main"
+    )
+  ),
+  exclude_patterns = c(
+    "adjust",
+    "vs"
+  )
+)
+
+gsea_adjusted_go_plot <- find_plot(
+  enrichment_dir,
+  list(
+    c(
+      "gsea",
+      "go",
+      "adjust"
+    )
+  ),
+  exclude_patterns = c(
+    "vs"
+  )
+)
+
+gsea_main_kegg_plot <- find_plot(
+  enrichment_dir,
+  list(
+    c(
+      "gsea",
+      "kegg",
+      "main"
+    )
+  ),
+  exclude_patterns = c(
+    "adjust",
+    "vs"
+  )
+)
+
+gsea_adjusted_kegg_plot <- find_plot(
+  enrichment_dir,
+  list(
+    c(
+      "gsea",
+      "kegg",
+      "adjust"
+    )
+  ),
+  exclude_patterns = c(
+    "vs"
+  )
+)
+
+gsea_model_stability_plot <- first_existing(
+  c(
+    file.path(
+      enrichment_dir,
+      "plots",
+      "GSEA_NES_main_vs_adjusted_ROSMAP.png"
+    ),
+    find_plot(
+      enrichment_dir,
+      list(
+        c(
+          "NES",
+          "main",
+          "adjust"
+        ),
+        c(
+          "functional",
+          "stability"
+        )
+      )
+    )
+  )
+)
+
+# ==============================================================================
+# FIGURAS — COMPARAÇÃO ROSMAP × GSE125583
+# ==============================================================================
+
+candidate_scatter_main <- file.path(
+  comparison_dir,
+  "plots",
+  "log2FC_GSE125583_vs_ROSMAP_main.png"
+)
+
+candidate_scatter_adjusted <- file.path(
+  comparison_dir,
+  "plots",
+  "log2FC_GSE125583_vs_ROSMAP_adjusted.png"
+)
+
+candidate_go_main_main <- file.path(
+  comparison_dir,
+  "plots",
+  "GSEA_NES_GSE125583_main_vs_ROSMAP_main_GO_BP.png"
+)
+
+candidate_kegg_main_main <- file.path(
+  comparison_dir,
+  "plots",
+  "GSEA_NES_GSE125583_main_vs_ROSMAP_main_KEGG.png"
+)
+
+candidate_go_main_adjusted <- file.path(
+  comparison_dir,
+  "plots",
+  "GSEA_NES_GSE125583_main_vs_ROSMAP_adjusted_GO_BP.png"
+)
+
+candidate_kegg_main_adjusted <- file.path(
+  comparison_dir,
+  "plots",
+  "GSEA_NES_GSE125583_main_vs_ROSMAP_adjusted_KEGG.png"
+)
+
+# ==============================================================================
+# FIGURAS — INTEGRAÇÃO FINAL
+# ==============================================================================
+
+venn_primary_plot <- file.path(
+  final_plot_dir,
+  "venn_final_primary_AD_HD_PD.png"
+)
+
+venn_strict_plot <- file.path(
+  final_plot_dir,
+  "venn_final_strict_AD_HD_PD.png"
+)
+
+venn_nominal_plot <- file.path(
+  final_plot_dir,
+  "venn_final_article_like_nominal_AD_HD_PD.png"
+)
+
+scatter_ad_hd_plot <- file.path(
+  final_plot_dir,
+  "log2FC_AD_vs_HD_common_universe.png"
+)
+
+scatter_ad_pd_plot <- file.path(
+  final_plot_dir,
+  "log2FC_AD_vs_PD_common_universe.png"
+)
+
+scatter_hd_pd_plot <- file.path(
+  final_plot_dir,
+  "log2FC_HD_vs_PD_common_universe.png"
+)
+
+rosmap_validation_main_plot <- file.path(
+  final_plot_dir,
+  "ROSMAP_validation_transdiagnostic_AD_main.png"
+)
+
+rosmap_validation_adjusted_plot <- file.path(
+  final_plot_dir,
+  "ROSMAP_validation_transdiagnostic_AD_adjusted.png"
+)
+
+# ==============================================================================
+# REGISTRO DA EXECUÇÃO VALIDADA
+# ==============================================================================
+#
+# Estes valores vêm dos relatórios textuais validados durante a Fase 01c e são
+# mantidos como fallback/descrição do relatório. Sempre que possível, as seções
+# analíticas acima também são recalculadas diretamente a partir dos TSVs.
+# ==============================================================================
+
+execution <- list(
+
+  audit = list(
+    matrix_samples = 1574L,
+    dlpfc_samples = 210L,
+    official_exclusions = 10L,
+    official_reason = "sample swap"
+  ),
+
+  metadata = list(
+    main_total = 144L,
+    AD = 77L,
+    Control = 67L,
+    broad_total = 153L,
+    broad_AD = 86L,
+    batch9_AD = 34L,
+    batch9_Control = 27L,
+    NYGC2_AD = 3L,
+    NYGC2_Control = 1L,
+    NYGC3_AD = 40L,
+    NYGC3_Control = 39L,
+    age90plus = 83L
+  ),
+
+  counts = list(
+    original_samples = 1574L,
+    selected_samples = 144L,
+    rows_before_technical = 60607L,
+    technical_removed = 4L,
+    gene_features = 60603L,
+    all_zero = 9168L,
+    lib_min = 14591286,
+    lib_median = 28453918,
+    lib_max = 113202825,
+    detect_min = 22070L,
+    detect_median = 31987L,
+    detect_max = 34758L
+  ),
+
+  harmonization = list(
+    features_input = 60603L,
+    stable_unique = 60558L,
+    unique_mapped = 35812L,
+    unmapped = 24373L,
+    ambiguous = 373L,
+    mapped_original_features = 35842L,
+    final_GeneID = 35779L,
+    collapsed_GeneID = 63L,
+    collapsed_features = 126L,
+    total_counts = 4320096088,
+    retained_counts = 3913862852,
+    excluded_counts = 406233236,
+    retained_percent = 90.5967,
+    final_all_zero = 4745L
+  ),
+
+  qc = list(
+    before = 35779L,
+    kept = 16620L,
+    removed = 19159L,
+    kept_percent = 46.45,
+    removed_percent = 53.55,
+    counts_before = 3913862852,
+    counts_after = 3909877532,
+    counts_removed = 3985320,
+    counts_kept_percent = 99.8982,
+    library_p_before = 0.844411,
+    library_p_after = 0.847547,
+    detected_p_before = 0.748653,
+    detected_p_after = 0.431818,
+    pc1 = 76.98,
+    pc2 = 7.61,
+    sizefactor_min = 0.2949,
+    sizefactor_median = 1.0401,
+    sizefactor_max = 4.1055
+  ),
+
+  enrichment = list(
+    main_ORA_GO_all = 2L,
+    main_ORA_GO_down = 36L,
+    main_ORA_KEGG_all = 1L,
+    adjusted_ORA_KEGG_down = 5L,
+    main_GSEA_GO = 423L,
+    main_GSEA_GO_pos = 233L,
+    main_GSEA_GO_neg = 190L,
+    main_GSEA_KEGG = 59L,
+    main_GSEA_KEGG_pos = 20L,
+    main_GSEA_KEGG_neg = 39L,
+    adjusted_GSEA_GO = 150L,
+    adjusted_GSEA_GO_pos = 84L,
+    adjusted_GSEA_GO_neg = 66L,
+    adjusted_GSEA_KEGG = 58L,
+    adjusted_GSEA_KEGG_pos = 18L,
+    adjusted_GSEA_KEGG_neg = 40L,
+    shared_GSEA_GO = 88L,
+    shared_GSEA_GO_same = 88L,
+    shared_GSEA_KEGG = 30L,
+    shared_GSEA_KEGG_same = 30L
+  )
+)
+```
+
+# 1. Introdução
+
+## 1.1 Contexto da Fase 01c
+
+A Fase 01b demonstrou que o **GSE125583** é uma coorte de doença de Alzheimer (AD) tecnicamente íntegra, com grande tamanho amostral, sinal diferencial robusto e elevada estabilidade frente ao ajuste por covariáveis. Entretanto, o conjunto utiliza **giro fusiforme**, enquanto os datasets empregados para doença de Huntington (HD) e doença de Parkinson (PD) são derivados de córtex pré-frontal BA9.
+
+A Fase 01c foi criada para avaliar o **ROSMAP em córtex pré-frontal dorsolateral (DLPFC; dorsolateral prefrontal cortex)** como alternativa de coorte principal de Alzheimer. A avaliação foi planejada antes da inspeção dos resultados segundo três dimensões:
+
+1. **concordância dos efeitos de expressão** entre ROSMAP e GSE125583;
+2. **coerência do enriquecimento funcional** entre as duas coortes;
+3. **estabilidade dos efeitos frente ao ajuste por covariáveis**.
+
+A compatibilidade anatômica foi considerada separadamente desses três critérios estatísticos.
+
+Após a conclusão da auditoria, das análises de expressão diferencial e da comparação formal entre as duas coortes, foi decidido em conjunto com a orientação do projeto **adotar o ROSMAP como coorte principal de AD** para as etapas subsequentes. O GSE125583 não é descartado e passa a cumprir o papel de **coorte independente de validação**.
+
+Essa escolha não é tratada como uma votação retrospectiva de “dois critérios contra um”. Os três critérios foram definidos previamente como dimensões de avaliação, mas não foi estabelecida uma regra automática de maioria ou um sistema de pesos. A decisão final é, portanto, uma **decisão metodológica de desenho do estudo**, fundamentada no conjunto das evidências estatísticas, funcionais e anatômicas obtidas nesta fase.
+
+## 1.2 Objetivos
+
+A Fase 01c teve como objetivos:
+
+- auditar os arquivos do ROSMAP e documentar a proveniência dos dados;
+- construir uma coorte DLPFC analítica com critérios fenotípicos previamente estabelecidos;
+- preparar e harmonizar as contagens para NCBI GeneID;
+- executar controle de qualidade e pré-filtragem;
+- avaliar o efeito de `sequencingBatch` observado na estrutura global dos dados;
+- realizar expressão diferencial por DESeq2 com modelo principal e modelo ajustado;
+- avaliar estabilidade funcional por ORA e GSEA;
+- comparar formalmente ROSMAP e GSE125583 segundo os três critérios definidos antes da inspeção dos resultados;
+- definir o papel final de cada coorte de Alzheimer no desenho do estudo.
+
+## 1.3 Fluxo analítico
+
+A seleção da coorte principal de Alzheimer foi fundamentada pelos seguintes scripts:
+
+```text
+00_audit_ROSMAP.R
+01_prepare_metadata_ROSMAP.R
+02_prepare_counts_ROSMAP.R
+03_harmonize_genes_ROSMAP.R
+04_qc_counts_ROSMAP.R
+05_deseq2_ROSMAP.R
+06_pathway_enrichment_ROSMAP.R
+07_compare_AD_candidates_ROSMAP_GSE125583.R
+```
+
+Os resultados desta fase foram preservados em:
+
+```text
+results/candidate_ROSMAP/
+```
+
+A integração transdiagnóstica posterior deve utilizar o desenho definido ao final desta fase:
+
+```text
+AD principal: ROSMAP
+AD validação independente: GSE125583
+HD principal: GSE64810
+PD principal: GSE68719
+```
+
+# 2. Auditoria, proveniência e critérios pré-definidos
+
+## 2.1 Proveniência e acesso controlado
+
+Os dados do ROSMAP foram acessados por meio do **Synapse**, sob acesso controlado. O pipeline mantém internamente um manifesto de auditoria com os identificadores e versões exatas dos arquivos utilizados (`00_synapse_manifest.tsv`), permitindo rastreabilidade e reprodutibilidade dentro do projeto.
+
+Os **Synapse IDs são identificadores de registros/arquivos da plataforma, e não identificadores de participantes**. Portanto, por si só, eles não correspondem a dados clínicos individualizantes. Ainda assim, como a publicação desses identificadores pode depender dos termos específicos de uso do recurso controlado, este relatório **não os exibe** até que a possibilidade de divulgação pública seja confirmada. A informação metodológica mantida aqui é que os dados foram obtidos via Synapse sob acesso controlado e que os IDs/versões permanecem registrados no arquivo de auditoria interno.
+
+A matriz de contagens auditada continha **1.574 colunas de amostras**, das quais **210** foram identificadas como DLPFC pelo cabeçalho e confirmadas no metadata.
+
+Um aspecto importante da auditoria foi a identificação de duplicatas de `specimenID` no arquivo de biospecimen completo. Essas duplicatas pertenciam ao conjunto geral do ROSMAP e **não estavam presentes entre as 210 amostras DLPFC selecionadas**. Para o subconjunto DLPFC, a correspondência entre counts, biospecimen e assay foi unívoca.
+
+## 2.2 Critérios definidos antes dos resultados
+
+Os critérios para avaliar o ROSMAP como candidato de AD foram formalizados antes da análise de expressão diferencial:
+
+1. concordância dos `log2FC` entre ROSMAP e GSE125583;
+2. coerência do enriquecimento funcional entre as coortes;
+3. estabilidade dos efeitos frente ao ajuste por covariáveis.
+
+Nenhum cutoff adicional foi criado após a inspeção dos resultados para declarar automaticamente uma coorte como adequada ou inadequada.
+
+```{r predefined-criteria}
+if (!is.null(
+  predefined_criteria
+)) {
+
+  report_table(
+    predefined_criteria,
+    caption = "Critérios de seleção definidos antes da inspeção dos resultados do ROSMAP."
+  )
+}
+```
+
+Também foi fixado um único critério principal de DEG para os datasets da integração:
+
+\[
+BH\text{-}FDR < 0,05
+\]
+
+e
+
+\[
+|\log_2FC| > 0,58
+\]
+
+correspondente a uma razão de aproximadamente **1,5 vezes**.
+
+Como análise estrita/sensibilidade foi utilizado:
+
+\[
+BH\text{-}FDR < 0,05
+\]
+
+e
+
+\[
+|\log_2FC| > 1
+\]
+
+O critério comparativo nominal foi preservado apenas para compatibilidade histórica:
+
+\[
+p < 0,05
+\]
+
+e
+
+\[
+|\log_2FC| > 1
+\]
+
+# 3. Construção do metadata analítico
+
+## 3.1 Seleção DLPFC e exclusões oficiais
+
+Das **210 amostras DLPFC**, 10 possuíam exclusão oficial registrada no biospecimen, todas por `sample swap`. Essas amostras foram removidas **antes** da definição fenotípica.
+
+A definição principal utilizou `cogdx`:
+
+- `cogdx = 1` como **Control**;
+- `cogdx = 4` como **AD**.
+
+Após as exclusões oficiais e a aplicação do critério fenotípico, foram mantidos:
+
+```{r metadata-main-summary}
+metadata_group_table <- data.table(
+  Grupo = c(
+    "AD",
+    "Control",
+    "Total"
+  ),
+  N = c(
+    n_AD,
+    n_Control,
+    nrow(metadata)
+  )
+)
+
+report_table(
+  metadata_group_table,
+  caption = "Composição do metadata principal do ROSMAP."
+)
+```
+
+O conjunto principal contém **77 AD e 67 controles**, totalizando **144 indivíduos únicos**.
+
+`cogdx = 5` foi preservado exclusivamente para uma análise fenotípica mais ampla, sem alterar a definição principal. Nessa sensibilidade, o grupo AD passaria a incluir `cogdx 4 + 5`, resultando em 86 AD e 67 controles, total de 153 amostras.
+
+## 3.2 Covariáveis
+
+O modelo ajustado foi pré-planejado como:
+
+\[
+\sim sequencingBatch + msex + RIN + pmi + group
+\]
+
+As 144 amostras apresentaram informação completa para essas covariáveis.
+
+`sequencingBatch` foi tratado como variável categórica com os rótulos originais do metadata:
+
+- `9`;
+- `NYGC2`;
+- `NYGC3`.
+
+A distribuição observada foi:
+
+```{r batch-table}
+batch_table <- data.table(
+  sequencingBatch = c(
+    "9",
+    "NYGC2",
+    "NYGC3"
+  ),
+  AD = c(
+    34,
+    3,
+    40
+  ),
+  Control = c(
+    27,
+    1,
+    39
+  )
+)
+
+report_table(
+  batch_table,
+  caption = "Distribuição de sequencingBatch por grupo no metadata principal."
+)
+```
+
+A codificação numérica de `msex` foi preservada como fator para modelagem, sem atribuição nominal no relatório quando a interpretação do código não é necessária para a análise.
+
+## 3.3 Idade, Braak e CERAD
+
+O campo `age_death` contém a categoria `90+` em **83 das 144 amostras principais**. Esses valores não foram convertidos artificialmente para uma idade exata e, por esse motivo, idade não foi incluída no modelo ajustado principal desta fase.
+
+`braaksc` e `ceradsc` foram preservados para descrição e auditoria, mas **não foram utilizados para redefinir os grupos nem como covariáveis do modelo principal**, pois representam características neuropatológicas intimamente relacionadas ao próprio fenótipo de Alzheimer.
+
+# 4. Preparação das contagens e harmonização gênica
+
+## 4.1 Preparação estrutural
+
+A matriz original continha **60.607 linhas**, das quais quatro correspondiam a métricas técnicas:
+
+```text
+N_unmapped
+N_multimapping
+N_noFeature
+N_ambiguous
+```
+
+Essas quatro linhas foram removidas, restando **60.603 features gênicas**.
+
+Foram selecionadas apenas as 144 colunas correspondentes ao metadata principal. Não foram detectados valores ausentes, negativos, não finitos ou fracionários. Nesta etapa, os genes totalmente zerados foram apenas auditados e **não removidos**.
+
+A matriz continha **9.168 genes all-zero** antes da harmonização.
+
+## 4.2 Identificadores Ensembl
+
+Os identificadores originais foram preservados durante a preparação. Entre as 60.603 features, foram observados:
+
+- 60.558 Ensembl versionados no formato padrão;
+- 45 registros `PAR_Y`;
+- 60.558 stable Ensembl IDs únicos.
+
+A remoção de versão/sufixo ocorreu somente na etapa específica de harmonização, preservando-se uma tabela de auditoria entre o identificador original e o stable ID.
+
+## 4.3 Mapeamento Ensembl → NCBI GeneID
+
+O mapeamento foi realizado com:
+
+- `AnnotationDbi 1.64.1`;
+- `org.Hs.eg.db 3.18.0`.
+
+A política foi conservadora:
+
+- mapeamento para **1 GeneID**: manter;
+- **0 GeneID**: registrar e excluir;
+- **mais de 1 GeneID**: registrar como ambíguo e excluir, evitando duplicação artificial de contagens.
+
+Os resultados foram:
+
+```{r harmonization-summary}
+harmonization_table <- data.table(
+  Métrica = c(
+    "Features de entrada",
+    "Stable Ensembl únicos",
+    "Stable Ensembl com mapeamento unívoco",
+    "Stable Ensembl sem GeneID",
+    "Stable Ensembl ambíguos",
+    "Features originais com mapeamento unívoco",
+    "GeneIDs finais",
+    "GeneIDs recebendo >1 feature"
+  ),
+  N = c(
+    execution$harmonization$features_input,
+    execution$harmonization$stable_unique,
+    execution$harmonization$unique_mapped,
+    execution$harmonization$unmapped,
+    execution$harmonization$ambiguous,
+    execution$harmonization$mapped_original_features,
+    execution$harmonization$final_GeneID,
+    execution$harmonization$collapsed_GeneID
+  )
+)
+
+report_table(
+  harmonization_table,
+  caption = "Resumo da harmonização Ensembl → NCBI GeneID."
+)
+```
+
+Quando várias features convergiram para o mesmo GeneID, as contagens foram **somadas por amostra**, sem média ou arredondamento.
+
+## 4.4 Balanço de contagens
+
+A matriz de entrada continha **4.320.096.088 contagens**. Após manter apenas mapeamentos unívocos, foram retidas **3.913.862.852 contagens**, equivalentes a **90,60%** do total.
+
+Foram excluídas **406.233.236 contagens (9,40%)** por ausência ou ambiguidade de mapeamento.
+
+O colapso de múltiplas features para GeneID preservou exatamente a soma das contagens retidas.
+
+# 5. Controle de qualidade e pré-filtragem
+
+## 5.1 Filtro de baixa expressão
+
+O filtro foi definido antes da análise diferencial como:
+
+\[
+count \ge 10
+\]
+
+em pelo menos **67 amostras**, onde 67 corresponde ao tamanho do menor grupo experimental.
+
+A filtragem reduziu o universo de:
+
+\[
+35.779 \rightarrow 16.620 \text{ GeneIDs}
+\]
+
+removendo 19.159 genes.
+
+```{r qc-filter-summary}
+qc_filter_table <- data.table(
+  Métrica = c(
+    "GeneIDs antes do filtro",
+    "GeneIDs mantidos",
+    "GeneIDs removidos",
+    "Percentual mantido",
+    "Percentual removido"
+  ),
+  Valor = c(
+    fmt_int(
+      execution$qc$before
+    ),
+    fmt_int(
+      execution$qc$kept
+    ),
+    fmt_int(
+      execution$qc$removed
+    ),
+    paste0(
+      fmt_num(
+        execution$qc$kept_percent,
+        2
+      ),
+      "%"
+    ),
+    paste0(
+      fmt_num(
+        execution$qc$removed_percent,
+        2
+      ),
+      "%"
+    )
+  )
+)
+
+report_table(
+  qc_filter_table,
+  caption = "Resumo do filtro de baixa expressão no ROSMAP."
+)
+```
+
+Embora **53,55% dos genes** tenham sido removidos, apenas **0,10% das contagens totais** foram descartadas. Assim, o filtro retirou predominantemente features de expressão muito baixa, preservando **99,8982% das contagens** da matriz harmonizada.
+
+Essa distinção é importante: **remover genes de baixa expressão não significa remover proporcionalmente a maior parte das contagens**.
+
+## 5.2 Profundidade de biblioteca e genes detectados
+
+As comparações descritivas entre AD e controles não mostraram evidência de diferença sistemática na profundidade global das bibliotecas:
+
+- antes do filtro: `p = 0,844`;
+- após o filtro: `p = 0,848`.
+
+Também não foi observada diferença significativa no número de genes detectados:
+
+- antes do filtro: `p = 0,749`;
+- após o filtro: `p = 0,432`.
+
+Nenhuma amostra foi removida com base nesses testes.
+
+```{r qc-library-plot, fig.cap="Distribuição da profundidade de biblioteca por grupo antes da filtragem de baixa expressão."}
+include_if_exists(
+  library_plot
+)
+```
+
+```{r qc-detected-plot, fig.cap="Número de GeneIDs detectados por amostra antes da filtragem de baixa expressão."}
+include_if_exists(
+  detected_plot
+)
+```
+
+## 5.3 VST e PCA
+
+A transformação **variance stabilizing transformation (VST)** foi utilizada exclusivamente para controle de qualidade e visualização. A análise diferencial posterior permaneceu baseada nas contagens inteiras filtradas.
+
+Para a PCA foi utilizado:
+
+```text
+VST blind = TRUE
+design de QC = ~ 1
+top 500 genes de maior variância
+```
+
+Os dois primeiros componentes explicaram:
+
+\[
+PC1 = 76,98\%
+\]
+
+\[
+PC2 = 7,61\%
+\]
+
+```{r pca-group, fig.cap="PCA das 144 amostras ROSMAP colorida por grupo diagnóstico."}
+include_if_exists(
+  pca_group_plot
+)
+```
+
+Na PCA por diagnóstico, AD e controles aparecem distribuídos nos mesmos grandes agrupamentos. O diagnóstico, portanto, **não é a principal fonte de variação global observada nos dados**.
+
+```{r pca-batch, fig.cap="PCA das 144 amostras ROSMAP colorida por sequencingBatch."}
+include_if_exists(
+  pca_batch_plot
+)
+```
+
+A coloração por `sequencingBatch` revela uma separação muito mais forte, especialmente ao longo de PC1. Isso significa que o **principal eixo de variação transcriptômica está fortemente associado ao lote de sequenciamento**, e não ao diagnóstico.
+
+Esse resultado não implica que as diferenças AD–Control sejam inexistentes. Ele indica que existe uma fonte técnica de variação de grande magnitude que precisa ser explicitamente avaliada. Por esse motivo, além do modelo principal `~ group`, foi executado um modelo ajustado contendo `sequencingBatch`, sexo, RIN e PMI.
+
+Nenhuma amostra foi excluída automaticamente com base na PCA.
+
+# 6. Expressão diferencial
+
+## 6.1 Modelos estatísticos
+
+A comparação foi definida como:
+
+\[
+AD \; vs \; Control
+\]
+
+com `Control` como referência, de modo que:
+
+\[
+\log_2FC > 0
+\]
+
+representa maior expressão em AD.
+
+O modelo principal foi:
+
+\[
+\sim group
+\]
+
+e o modelo ajustado de robustez:
+
+\[
+\sim sequencingBatch + msex + RIN + pmi + group
+\]
+
+Os mesmos **144 indivíduos** foram utilizados nos dois modelos.
+
+O modelo ajustado apresentou design de posto completo (`rank 7/7`), sem necessidade de remoção adicional de indivíduos.
+
+## 6.2 Resultados do modelo principal e ajustado
+
+```{r deseq-summary}
+deseq_summary_table <- data.table(
+  Métrica = c(
+    "Genes testados",
+    "FDR < 0,05",
+    "DEG principal",
+    "Principal — Up",
+    "Principal — Down",
+    "Critério estrito",
+    "Comparativo nominal"
+  ),
+  `Modelo principal` = c(
+    nrow(
+      deseq_main
+    ),
+    sum(
+      !is.na(
+        deseq_main$padj
+      ) &
+        deseq_main$padj < ALPHA
+    ),
+    sum(
+      main_primary
+    ),
+    sum(
+      main_primary &
+        deseq_main$log2FoldChange > 0
+    ),
+    sum(
+      main_primary &
+        deseq_main$log2FoldChange < 0
+    ),
+    sum(
+      main_strict
+    ),
+    sum(
+      main_nominal
+    )
+  ),
+  `Modelo ajustado` = c(
+    nrow(
+      deseq_adjusted
+    ),
+    sum(
+      !is.na(
+        deseq_adjusted$padj
+      ) &
+        deseq_adjusted$padj < ALPHA
+    ),
+    sum(
+      adjusted_primary
+    ),
+    sum(
+      adjusted_primary &
+        deseq_adjusted$log2FoldChange > 0
+    ),
+    sum(
+      adjusted_primary &
+        deseq_adjusted$log2FoldChange < 0
+    ),
+    sum(
+      adjusted_strict
+    ),
+    sum(
+      adjusted_nominal
+    )
+  )
+)
+
+report_table(
+  deseq_summary_table,
+  caption = "Resumo da expressão diferencial no ROSMAP."
+)
+```
+
+No modelo principal, 56 genes apresentaram `FDR < 0,05`, mas apenas **15** também ultrapassaram `|log2FC| > 0,58`, sendo **8 Up** e **7 Down** em AD.
+
+No modelo ajustado, 21 genes apresentaram `FDR < 0,05`, dos quais **11** satisfizeram o critério principal, sendo **2 Up** e **9 Down**.
+
+O critério estrito produziu 0 genes no modelo principal e 7 no modelo ajustado.
+
+```{r volcano-main, fig.cap="Volcano plot do modelo principal do ROSMAP."}
+include_if_exists(
+  volcano_main_plot
+)
+```
+
+```{r volcano-adjusted, fig.cap="Volcano plot do modelo ajustado do ROSMAP."}
+include_if_exists(
+  volcano_adjusted_plot
+)
+```
+
+## 6.3 MA plot
+
+```{r ma-plot, fig.cap="MA plot da comparação AD vs Control no modelo principal."}
+include_if_exists(
+  ma_plot
+)
+```
+
+A maior parte dos genes apresenta magnitude pequena de efeito. Isso é coerente com o número reduzido de genes que ultrapassa simultaneamente o controle de FDR e o limiar de `|log2FC| > 0,58`.
+
+## 6.4 Estimativa de dispersão
+
+```{r dispersion-main, fig.cap="Estimativas de dispersão do DESeq2 no modelo principal."}
+include_if_exists(
+  dispersion_main_plot
+)
+```
+
+```{r dispersion-adjusted, fig.cap="Estimativas de dispersão do DESeq2 no modelo ajustado."}
+include_if_exists(
+  dispersion_adjusted_plot
+)
+```
+
+Nos gráficos de dispersão, cada gene possui uma estimativa de variabilidade em relação à sua média de contagens normalizadas. A curva ajustada representa a tendência média de dispersão esperada para genes com determinada abundância; as estimativas finais combinam a informação específica de cada gene com essa tendência por meio do procedimento de shrinkage do DESeq2.
+
+A maior dispersão observada para genes de menor expressão é esperada em RNA-seq. Genes marcados como outliers de dispersão não foram automaticamente convertidos em exclusões de amostras.
+
+## 6.5 Heatmaps dos DEGs principais
+
+```{r heatmap-main, fig.cap="Heatmap dos DEGs que satisfazem o critério principal no modelo principal."}
+include_if_exists(
+  heatmap_main_plot
+)
+```
+
+```{r heatmap-adjusted, fig.cap="Heatmap dos DEGs que satisfazem o critério principal no modelo ajustado."}
+include_if_exists(
+  heatmap_adjusted_plot
+)
+```
+
+Os heatmaps contêm apenas genes que realmente satisfazem o critério principal em cada modelo; o pipeline **não completa artificialmente 50 linhas com genes não significativos**.
+
+As anotações superiores de `sequencingBatch` e grupo permitem visualizar que a estrutura das amostras continua fortemente relacionada ao batch. Por isso, os heatmaps devem ser interpretados como representação dos genes selecionados por cada modelo, e não como evidência de separação perfeita entre AD e controles.
+
+## 6.6 Estabilidade dos efeitos frente às covariáveis
+
+```{r stability-table}
+stability_table <- data.table(
+  Métrica = c(
+    "Spearman dos log2FC — todos os genes",
+    "Pearson dos log2FC — todos os genes",
+    "DEGs principais — modelo principal",
+    "DEGs principais — modelo ajustado",
+    "Compartilhados",
+    "Somente principal",
+    "Somente ajustado",
+    "Jaccard dos DEGs principais",
+    "Compartilhados — mesma direção",
+    "Compartilhados — direção oposta"
+  ),
+  Valor = c(
+    fmt_num(
+      rho_main_adjusted,
+      4
+    ),
+    fmt_num(
+      pearson_main_adjusted,
+      4
+    ),
+    fmt_int(
+      length(
+        main_primary_ids
+      )
+    ),
+    fmt_int(
+      length(
+        adjusted_primary_ids
+      )
+    ),
+    fmt_int(
+      length(
+        shared_primary_ids
+      )
+    ),
+    fmt_int(
+      length(
+        setdiff(
+          main_primary_ids,
+          adjusted_primary_ids
+        )
+      )
+    ),
+    fmt_int(
+      length(
+        setdiff(
+          adjusted_primary_ids,
+          main_primary_ids
+        )
+      )
+    ),
+    fmt_num(
+      primary_jaccard,
+      4
+    ),
+    fmt_int(
+      shared_same_direction
+    ),
+    fmt_int(
+      shared_opposite_direction
+    )
+  )
+)
+
+report_table(
+  stability_table,
+  caption = "Estabilidade do efeito AD entre o modelo principal e o modelo ajustado."
+)
+```
+
+```{r stability-plot, fig.cap="Comparação dos log2FoldChanges estimados pelo modelo principal e pelo modelo ajustado."}
+include_if_exists(
+  stability_plot
+)
+```
+
+A correlação global é moderada a alta (`Spearman ≈ 0,851`), mostrando que existe uma tendência geral de concordância dos efeitos. Entretanto, a **classificação binária de DEGs é pouco estável**: apenas 1 gene satisfaz o critério principal em ambos os modelos, com Jaccard de aproximadamente 0,04.
+
+Portanto, duas afirmações precisam ser mantidas simultaneamente:
+
+1. os efeitos de muitos genes preservam uma ordem global semelhante entre os modelos;
+2. os genes que cruzam os cutoffs de FDR e magnitude mudam substancialmente após o ajuste.
+
+Essa instabilidade é compatível com a forte estrutura de `sequencingBatch` observada na PCA e é uma limitação importante do ROSMAP para ser utilizado como única coorte principal de AD.
+
+# 7. Enriquecimento funcional
+
+## 7.1 Estratégia
+
+Foram utilizadas duas abordagens complementares:
+
+**ORA — Over-Representation Analysis**
+
+- aplicada aos DEGs do critério principal;
+- universo de fundo = 16.620 genes efetivamente testados;
+- GO Biological Process e KEGG;
+- análises `all`, `up` e `down`;
+- listas com menos de 5 genes foram registradas e não forçadas à execução.
+
+**GSEA — Gene Set Enrichment Analysis**
+
+- ranking completo baseado na estatística de Wald do DESeq2;
+- GO Biological Process e KEGG;
+- `minGSSize = 10`;
+- `maxGSSize = 500`;
+- significância funcional `BH-FDR < 0,05`.
+
+Na GSEA:
+
+\[
+NES > 0
+\]
+
+indica enriquecimento na direção AD, enquanto:
+
+\[
+NES < 0
+\]
+
+indica enriquecimento na direção Control, isto é, processo relativamente reduzido em AD.
+
+## 7.2 ORA e limitação das listas pequenas
+
+As listas binárias de DEGs do ROSMAP são pequenas. Consequentemente, os resultados da ORA são sensíveis a poucos genes e devem ser interpretados com cautela.
+
+No modelo principal foram observados:
+
+- GO BP `all`: 2 termos;
+- GO BP `down`: 36 termos;
+- KEGG `all`: 1 termo.
+
+No modelo ajustado, a principal ocorrência registrada foi:
+
+- KEGG `down`: 5 termos.
+
+```{r ora-main-all-go, fig.cap="ORA de GO Biological Process utilizando todos os DEGs principais do modelo principal."}
+include_if_exists(
+  ora_main_all_go_plot
+)
+```
+
+```{r ora-main-down-go, fig.cap="ORA de GO Biological Process para DEGs Down no modelo principal."}
+include_if_exists(
+  ora_main_down_go_plot
+)
+```
+
+```{r ora-adjusted-down-kegg, fig.cap="ORA KEGG para DEGs Down no modelo ajustado."}
+include_if_exists(
+  ora_adjusted_down_kegg_plot
+)
+```
+
+Termos como metabolismo/catabolismo de peróxido de hidrogênio e resposta a espécies reativas de oxigênio refletem o conjunto restrito de genes selecionados. Resultados KEGG com categorias de doenças infecciosas ou cardiomiopatias não devem ser interpretados literalmente como presença dessas condições; conjuntos funcionais podem compartilhar genes com processos bioquímicos mais gerais.
+
+## 7.3 GSEA do modelo principal
+
+O modelo principal apresentou:
+
+- **423 termos GO BP significativos**, 233 com NES positivo e 190 negativo;
+- **59 vias KEGG significativas**, 20 positivas e 39 negativas.
+
+```{r gsea-main-go, fig.cap="GSEA GO Biological Process do modelo principal."}
+include_if_exists(
+  gsea_main_go_plot
+)
+```
+
+Entre os sinais negativos destacam-se processos sinápticos, ciclo de vesículas, sinalização trans-sináptica, secreção de neurotransmissores e plasticidade sináptica. Esses resultados representam menor enriquecimento relativo em AD.
+
+```{r gsea-main-kegg, fig.cap="GSEA KEGG do modelo principal."}
+include_if_exists(
+  gsea_main_kegg_plot
+)
+```
+
+Em KEGG, vários termos relacionados a transmissão sináptica aparecem no lado negativo do ranking, enquanto alguns programas de sinalização aparecem na direção positiva.
+
+## 7.4 GSEA do modelo ajustado
+
+O modelo ajustado apresentou:
+
+- **150 termos GO BP significativos**, 84 positivos e 66 negativos;
+- **58 vias KEGG significativas**, 18 positivas e 40 negativas.
+
+```{r gsea-adjusted-go, fig.cap="GSEA GO Biological Process do modelo ajustado."}
+include_if_exists(
+  gsea_adjusted_go_plot
+)
+```
+
+```{r gsea-adjusted-kegg, fig.cap="GSEA KEGG do modelo ajustado."}
+include_if_exists(
+  gsea_adjusted_kegg_plot
+)
+```
+
+No modelo ajustado, sinais negativos incluem metabolismo energético, respiração aeróbica, fosforilação oxidativa e processamento/exportação proteica. Entre os programas positivos aparecem termos de regulação do destino celular, modificação de histonas e sinalização.
+
+## 7.5 Estabilidade funcional entre os modelos
+
+Apesar da baixa sobreposição dos DEGs binários, a GSEA mostra uma camada de estabilidade funcional:
+
+- GO BP: 88 termos significativos compartilhados; **88/88 na mesma direção do NES**;
+- KEGG: 30 vias significativas compartilhadas; **30/30 na mesma direção do NES**.
+
+```{r gsea-model-stability, fig.cap="Concordância do NES entre o modelo principal e o modelo ajustado do ROSMAP."}
+include_if_exists(
+  gsea_model_stability_plot
+)
+```
+
+A estabilidade funcional é, portanto, maior do que a estabilidade da classificação binária de DEGs. Isso reforça a utilidade da GSEA para avaliar sinais coordenados distribuídos ao longo do transcriptoma, especialmente quando poucas features cruzam um cutoff rígido.
+
+# 8. Comparação formal entre ROSMAP e GSE125583
+
+## 8.1 Princípio
+
+A comparação foi realizada segundo os critérios pré-definidos:
+
+**A. Concordância gene a gene dos log2FC**
+
+**B. Coerência funcional por GSEA**
+
+**C. Estabilidade dos efeitos após ajuste por covariáveis**
+
+A decisão não foi baseada simplesmente no número de DEGs.
+
+## 8.2 Universo testável
+
+O GSE125583 possui 21.218 genes testáveis e o ROSMAP 16.620. A interseção contém **15.894 genes**, com Jaccard do universo de aproximadamente **0,724**.
+
+Essa interseção foi utilizada nas comparações de DEGs para impedir que diferenças de cobertura gênica fossem confundidas com diferenças biológicas.
+
+## 8.3 Critério A — concordância dos efeitos
+
+```{r candidate-gene-summary}
+report_table(
+  candidate_gene_summary,
+  caption = "Concordância gene a gene entre GSE125583 e ROSMAP."
+)
+```
+
+No comparativo principal × principal:
+
+- genes comparados: 15.894;
+- Spearman dos `log2FC`: **0,6875**;
+- Pearson: **0,6837**;
+- Spearman entre genes informativos com `|log2FC| > 0,58` em pelo menos uma coorte: **0,7587**.
+
+```{r candidate-scatter-main, fig.cap="Concordância dos log2FoldChanges entre GSE125583 principal e ROSMAP principal."}
+include_if_exists(
+  candidate_scatter_main
+)
+```
+
+Apesar da concordância global positiva, a sobreposição dos genes que cruzam simultaneamente os cutoffs de DEG é pequena, sobretudo porque o ROSMAP gera uma lista principal muito menor.
+
+Na comparação GSE125583 principal × ROSMAP ajustado, a correlação cai para aproximadamente **0,538**, indicando maior alteração das estimativas após a inclusão das covariáveis do ROSMAP.
+
+```{r candidate-scatter-adjusted, fig.cap="Concordância dos log2FoldChanges entre GSE125583 principal e ROSMAP ajustado."}
+include_if_exists(
+  candidate_scatter_adjusted
+)
+```
+
+## 8.4 Critério B — coerência funcional
+
+```{r candidate-functional-summary}
+report_table(
+  candidate_functional,
+  caption = "Concordância funcional por GSEA entre GSE125583 e ROSMAP."
+)
+```
+
+A comparação principal × principal apresentou forte concordância do NES nos termos testados em comum:
+
+- GO BP: `Spearman ≈ 0,773`;
+- KEGG: `Spearman ≈ 0,790`.
+
+Além disso:
+
+- GO BP: 331 termos significativos em ambas as coortes e **331/331 na mesma direção**;
+- KEGG: 52 vias significativas em ambas e **52/52 na mesma direção**.
+
+```{r candidate-go-main-main, fig.cap="Concordância do NES de GO BP entre GSE125583 principal e ROSMAP principal."}
+include_if_exists(
+  candidate_go_main_main
+)
+```
+
+```{r candidate-kegg-main-main, fig.cap="Concordância do NES de KEGG entre GSE125583 principal e ROSMAP principal."}
+include_if_exists(
+  candidate_kegg_main_main
+)
+```
+
+Quando o modelo ajustado do ROSMAP é utilizado, a concordância funcional diminui, mas permanece positiva:
+
+- GO BP: `Spearman ≈ 0,611`;
+- KEGG: `Spearman ≈ 0,628`.
+
+A concordância de direção entre os termos significativos compartilhados permanece completa nos resultados observados.
+
+## 8.5 Critério C — estabilidade frente às covariáveis
+
+```{r candidate-stability-summary}
+candidate_stability_display <- copy(
+  candidate_stability
+)
+
+rename_map <- c(
+  primary_Jaccard = "Jaccard_DEGs_principais_main_vs_adjusted",
+  spearman_main_adjusted = "Spearman_log2FC_main_vs_adjusted",
+  primary_main = "DEGs_principais_main",
+  primary_adjusted = "DEGs_principais_adjusted",
+  shared_primary = "DEGs_principais_compartilhados"
+)
+
+for (old_name in names(rename_map)) {
+  if (old_name %in% names(candidate_stability_display)) {
+    setnames(
+      candidate_stability_display,
+      old_name,
+      rename_map[[old_name]]
+    )
+  }
+}
+
+report_table(
+  candidate_stability_display,
+  caption = "Estabilidade interna dos efeitos no GSE125583 e no ROSMAP."
+)
+```
+
+O contraste entre as coortes é marcante:
+
+**GSE125583**
+
+- Spearman principal × ajustado: `≈ 0,9946`;
+- DEGs principais: 1.687 no principal e 1.540 no ajustado;
+- 1.481 compartilhados;
+- Jaccard: `≈ 0,8482`.
+
+**ROSMAP**
+
+- Spearman principal × ajustado: `≈ 0,8507`;
+- DEGs principais: 15 no principal e 11 no ajustado;
+- apenas 1 compartilhado;
+- Jaccard: `≈ 0,0400`.
+
+O **Jaccard dos DEGs principais** mede a estabilidade da **lista binária de genes classificados como DEG** entre os modelos principal e ajustado. Ele é calculado como:
+
+\[
+J = \frac{|A \cap B|}{|A \cup B|}
+\]
+
+em que `A` é o conjunto de DEGs principais do modelo `main` e `B` o conjunto do modelo `adjusted`.
+
+O índice varia de 0 a 1. Valor próximo de 1 indica que praticamente os mesmos genes cruzam o cutoff nos dois modelos; valor próximo de 0 indica baixa sobreposição. Assim, o valor de aproximadamente **0,848** no GSE125583 representa alta estabilidade da lista de DEGs, enquanto o valor de aproximadamente **0,040** no ROSMAP indica baixa estabilidade da classificação binária.
+
+Esse índice **não é uma correlação dos log2FC**. Por isso ele deve ser lido em conjunto com a correlação de Spearman: no ROSMAP, os efeitos ainda apresentam correlação global positiva (`rho ≈ 0,851`), mas poucos genes permanecem acima simultaneamente dos cutoffs de FDR e magnitude nos dois modelos.
+
+## 8.6 Contexto anatômico
+
+O ROSMAP utiliza **DLPFC**, isto é, córtex pré-frontal dorsolateral. Trata-se de uma região do córtex pré-frontal associada a funções executivas e que, em termos anatômicos gerais, é mais próxima do contexto pré-frontal utilizado nos datasets de HD e PD do que o giro fusiforme do GSE125583.
+
+Não foi assumido que as amostras ROSMAP correspondam exatamente a BA9, porque o campo de Brodmann específico não está disponível para essas amostras no metadata utilizado. A formulação mais segura é, portanto, **DLPFC/prefrontal, anatomicamente mais próximo dos datasets BA9 de HD e PD**.
+
+## 8.7 Interpretação conjunta dos três critérios e escolha da coorte principal
+
+A comparação formal mostrou um padrão consistente, porém não uniforme entre as três dimensões avaliadas.
+
+### Critério A — concordância dos efeitos
+
+O ROSMAP apresentou **boa concordância gene a gene** com o GSE125583. No comparativo principal × principal:
+
+- Spearman dos `log2FC`: **0,6875**;
+- Pearson: **0,6837**;
+- Spearman entre genes informativos: **0,7587**.
+
+Esses valores indicam que as duas coortes recuperam uma direção global de alteração transcriptômica semelhante, apesar das diferenças de região cerebral, tamanho amostral e estrutura técnica.
+
+### Critério B — coerência funcional
+
+A concordância funcional foi ainda mais clara. Na GSEA principal × principal:
+
+- GO BP: `Spearman ≈ 0,773`;
+- KEGG: `Spearman ≈ 0,790`.
+
+Além disso, todos os termos significativos compartilhados considerados na comparação apresentaram a **mesma direção do NES**:
+
+- GO BP: **331/331**;
+- KEGG: **52/52**.
+
+Portanto, mesmo quando genes individuais não cruzam os mesmos cutoffs em ambas as coortes, os processos biológicos coordenados apresentam elevada coerência.
+
+### Critério C — estabilidade frente às covariáveis
+
+Este foi o principal ponto de cautela para o ROSMAP.
+
+No GSE125583:
+
+- Spearman `main × adjusted ≈ 0,9946`;
+- Jaccard dos DEGs principais `≈ 0,848`.
+
+No ROSMAP:
+
+- Spearman `main × adjusted ≈ 0,8507`;
+- Jaccard dos DEGs principais `≈ 0,040`.
+
+Isso significa que, no ROSMAP, a **ordenação global dos efeitos permanece razoavelmente concordante**, mas a lista de genes que cruza simultaneamente os cutoffs de FDR e magnitude muda substancialmente após o ajuste.
+
+Essa instabilidade não foi ocultada nem utilizada para excluir amostras. Ela permanece registrada como uma limitação técnica da coorte e será considerada nas interpretações subsequentes.
+
+### Contexto anatômico
+
+O ROSMAP utiliza **DLPFC**, isto é, córtex pré-frontal dorsolateral. Os datasets atuais de HD e PD são derivados de contexto pré-frontal BA9. Não foi assumido que as amostras ROSMAP correspondam exatamente a BA9, pois essa informação específica não está disponível no metadata utilizado; a interpretação conservadora é que o ROSMAP utiliza uma região **pré-frontal anatomicamente mais próxima** de HD e PD do que o giro fusiforme empregado pelo GSE125583.
+
+### Decisão metodológica
+
+Após a avaliação conjunta dos resultados, a orientação do projeto decidiu **prosseguir com o ROSMAP como coorte principal de Alzheimer**.
+
+A justificativa para essa escolha é composta por quatro pontos:
+
+1. o ROSMAP apresentou concordância positiva e substancial dos efeitos com uma coorte independente de AD;
+2. apresentou forte coerência funcional com o GSE125583, inclusive com concordância de direção dos termos compartilhados;
+3. utiliza tecido de uma região pré-frontal, proporcionando maior coerência anatômica com os datasets atuais de HD e PD;
+4. sua principal limitação, o forte efeito de `sequencingBatch`, é conhecida, quantificada e explicitamente modelada na análise ajustada.
+
+Portanto, a escolha do ROSMAP **não significa que o problema de batch tenha desaparecido**. A coorte foi selecionada apesar dessa limitação, porque o conjunto das evidências favorece sua utilização no desenho comparativo do projeto. O efeito técnico continuará sendo documentado por meio da comparação entre os modelos principal e ajustado.
+
+O GSE125583 permanece metodologicamente importante e será utilizado como **coorte independente de validação**, permitindo testar se os sinais observados no ROSMAP se reproduzem em uma segunda coorte de Alzheimer com características técnicas e anatômicas diferentes.
+
+# 9. Papel final das coortes de Alzheimer
+
+## 9.1 ROSMAP como coorte principal
+
+A partir desta fase, o ROSMAP passa a ocupar o papel de **coorte principal de Alzheimer** no desenho do estudo.
+
+Essa definição não altera os critérios estatísticos estabelecidos anteriormente:
+
+- critério principal: `BH-FDR < 0,05` e `|log2FC| > 0,58`;
+- critério estrito: `BH-FDR < 0,05` e `|log2FC| > 1`;
+- comparativo nominal: `p < 0,05` e `|log2FC| > 1`.
+
+Também não altera retrospectivamente os resultados do modelo principal ou do modelo ajustado. Ambos permanecem registrados porque quantificam a sensibilidade dos efeitos às covariáveis técnicas e biológicas.
+
+## 9.2 GSE125583 como validação independente
+
+O GSE125583 não será removido do projeto. Seu papel passa a ser o de **validação independente da componente de AD**.
+
+Essa configuração é particularmente útil porque as duas coortes apresentam diferenças importantes:
+
+- ROSMAP: DLPFC, menor lista de DEGs e maior sensibilidade ao ajuste;
+- GSE125583: giro fusiforme, maior tamanho amostral e maior estabilidade da lista de DEGs.
+
+Assim, a reprodução de direção, magnitude relativa ou enriquecimento funcional entre as duas coortes constitui uma validação mais informativa do que simplesmente repetir a análise em dois conjuntos com características quase idênticas.
+
+## 9.3 Consequência para a integração AD–HD–PD
+
+A integração transdiagnóstica subsequente deve ser reexecutada com o seguinte desenho:
+
+```text
+AD principal: ROSMAP
+HD principal: GSE64810
+PD principal: GSE68719
+AD validação independente: GSE125583
+```
+
+Resultados produzidos anteriormente com GSE125583 ocupando a posição de AD principal não devem ser apresentados como a integração final do projeto após esta decisão. Eles permanecem úteis como análise exploratória e registro do processo de seleção, mas o desenho definitivo deve ser recalculado com ROSMAP na posição de AD.
+
+# 10. Limitações e salvaguardas metodológicas
+
+A escolha do ROSMAP requer que suas limitações sejam mantidas explicitamente na interpretação.
+
+A principal delas é o forte efeito de `sequencingBatch` observado na PCA. PC1 explicou aproximadamente **76,98% da variância** e separou fortemente os lotes. Por esse motivo, a análise do ROSMAP deve sempre ser acompanhada pela comparação entre:
+
+\[
+\sim group
+\]
+
+e
+
+\[
+\sim sequencingBatch + msex + RIN + pmi + group
+\]
+
+O modelo ajustado não é usado para apagar o efeito técnico dos dados, mas para medir o quanto a estimativa do efeito de AD depende dessas covariáveis.
+
+Além disso, o número reduzido de DEGs principais no ROSMAP exige cautela na interpretação de análises baseadas exclusivamente em listas binárias. Sempre que apropriado, devem ser consideradas conjuntamente:
+
+- magnitude e direção do `log2FC`;
+- estabilidade `main × adjusted`;
+- enriquecimento funcional baseado no ranking completo;
+- reprodução dos sinais no GSE125583.
+
+A escolha do ROSMAP também não implica equivalência anatômica perfeita entre DLPFC e BA9. A justificativa anatômica é de **maior proximidade regional**, não de identidade exata.
+
+# 11. Síntese dos principais resultados
+
+```{r synthesis-table}
+synthesis_table <- data.table(
+  Etapa = c(
+    "Metadata ROSMAP",
+    "Harmonização final",
+    "Genes após QC",
+    "Estrutura global",
+    "DEGs ROSMAP",
+    "Estabilidade ROSMAP",
+    "Concordância ROSMAP × GSE125583",
+    "Coerência funcional GO BP",
+    "Coerência funcional KEGG",
+    "Contexto anatômico",
+    "Decisão final",
+    "Papel do GSE125583"
+  ),
+  Resultado = c(
+    "144 amostras: 77 AD / 67 Control",
+    "35.779 GeneIDs únicos",
+    "16.620 GeneIDs",
+    "PC1 = 76,98%; forte associação a sequencingBatch",
+    "15 no modelo principal; 11 no ajustado",
+    "Spearman main×adjusted ≈ 0,851; Jaccard ≈ 0,040",
+    "Spearman principal×principal ≈ 0,688",
+    "Spearman NES ≈ 0,773; 331 termos compartilhados na mesma direção",
+    "Spearman NES ≈ 0,790; 52 termos compartilhados na mesma direção",
+    "DLPFC/prefrontal; mais próximo do contexto de HD e PD do que giro fusiforme",
+    "ROSMAP = coorte principal de AD",
+    "Validação independente de AD"
+  )
+)
+
+report_table(
+  synthesis_table,
+  caption = "Síntese dos principais resultados e da decisão metodológica da Fase 01c."
+)
+```
+
+# 12. Conclusão da Fase 01c
+
+A Fase 01c estabeleceu uma coorte analítica ROSMAP composta por **144 amostras DLPFC**, sendo 77 casos de AD e 67 controles. Após harmonização e filtragem de baixa expressão, **16.620 GeneIDs** permaneceram disponíveis para análise.
+
+O controle de qualidade identificou um forte efeito de `sequencingBatch`, responsável por grande parte da estrutura global observada na PCA. Esse efeito constitui a principal limitação técnica da coorte e foi avaliado explicitamente por meio de um modelo ajustado contendo batch, sexo, RIN e PMI.
+
+Apesar da baixa estabilidade da lista binária de DEGs entre os modelos principal e ajustado, os efeitos transcriptômicos mantiveram correlação global positiva. Mais importante para a comparação entre coortes, o ROSMAP apresentou **boa concordância gene a gene com o GSE125583** e **forte coerência funcional**, particularmente no comparativo principal × principal.
+
+A análise pré-definida produziu, portanto, um resultado assimétrico: o ROSMAP foi favorável nos critérios de concordância dos efeitos e coerência funcional, mas apresentou menor estabilidade frente às covariáveis. A decisão final não foi obtida por uma regra automática de maioria. Após considerar os três critérios, a limitação técnica conhecida e o contexto anatômico, a orientação do projeto decidiu **adotar o ROSMAP como coorte principal de Alzheimer**.
+
+A justificativa central é que o ROSMAP combina um sinal de AD reproduzível em uma coorte independente, coerência funcional entre estudos e maior proximidade anatômica com os datasets pré-frontais utilizados para HD e PD. O forte efeito de batch permanece como limitação explícita e continuará sendo acompanhado pelo modelo ajustado.
+
+O **GSE125583 passa a ser utilizado como coorte independente de validação**, e não é descartado. Essa organização permite que os resultados principais derivados do ROSMAP sejam posteriormente testados em um conjunto de Alzheimer maior, tecnicamente mais estável e obtido em outra região cerebral.
+
+O desenho definido ao final da Fase 01c é, portanto:
+
+\[
+\boxed{
+\text{ROSMAP = coorte principal de AD}
+}
+\]
+
+\[
+\boxed{
+\text{GSE125583 = validação independente de AD}
+}
+\]
+
+
+---
+
+**Fim da Fase 01c.**

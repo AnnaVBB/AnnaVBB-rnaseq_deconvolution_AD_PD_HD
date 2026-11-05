@@ -1,0 +1,760 @@
+---
+title: "Fase 02 | Deconvolução celular — relatório integral"
+subtitle: "Mathys 2019 • MuSiC2 • BisqueRNA • dtangle • comparação • bMIND"
+author: "TCC — Análise transcriptômica AD, PD e HD"
+date: "`r format(Sys.Date(), '%d/%m/%Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    number_sections: true
+    theme: readable
+    highlight: tango
+    code_folding: hide
+    self_contained: true
+params:
+  project_root: "."
+  max_rows_table: 60
+  show_all_rows: false
+  max_figures_per_stage: 80
+  include_all_tables: false
+  show_all_figures: true
+  pdf_preview_max: 12
+---
+
+<style>
+body {font-size:15px;line-height:1.6;color:#273142}
+h1, h2, h3 {color:#141937}
+h1 {border-bottom:2px solid #00ada2;padding-bottom:7px}
+h2 {margin-top:35px}
+blockquote {border-left:4px solid #00ada2;color:#485265}
+table {font-size:12px;line-height:1.4;width:100%;}
+.table {margin-bottom:18px}
+small,.small {color:#64748b}
+strong {color:#141937}
+.warning {background:#fff8ed;border-left:4px solid #bd7a20;padding:12px 14px;margin:14px 0}
+.note {background:#f3f8f7;border-left:4px solid #00ada2;padding:12px 14px;margin:14px 0}
+.figure img {max-height:790px;object-fit:contain}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE,
+                      fig.align="center", out.width="93%", dpi=125)
+options(stringsAsFactors=FALSE, scipen=5)
+required <- c("knitr", "data.table")
+missing <- required[!vapply(required, requireNamespace, logical(1))]
+if (length(missing)) stop("Pacotes necessarios: ",paste(missing,collapse=", "))
+suppressPackageStartupMessages(library(data.table))
+
+# Os scripts da Fase 02 usam caminhos relativos a raiz do projeto.
+# Renderize da raiz ou passe params$project_root / DECONV_ROOT.
+root_arg <- Sys.getenv("DECONV_ROOT", unset="")
+if (!nzchar(root_arg)) root_arg <- params$project_root
+candidates <- unique(c(root_arg, getwd(), file.path(getwd(),".."),
+                       file.path(getwd(),"../..")))
+project_root <- NULL
+for (candidate in candidates) {
+  if (!dir.exists(candidate)) next
+  candidate <- normalizePath(candidate, winslash="/", mustWork=TRUE)
+  if (dir.exists(file.path(candidate,"scripts","phase02_deconvolution")) ||
+      dir.exists(file.path(candidate,"results","deconvolution"))) {
+    project_root <- candidate
+    break
+  }
+}
+if (is.null(project_root)) {
+  stop("Raiz nao encontrada: execute na raiz do GitHub (com scripts/phase02_deconvolution ou results/deconvolution), ou configure params$project_root / DECONV_ROOT.")
+}
+knitr::opts_knit$set(root.dir=project_root)
+P <- function(...) file.path(project_root, ...)
+OUT_DIR <- P("results","deconvolution")
+REPORT_DIR <- P("results","reports","deconvolution")
+dir.create(REPORT_DIR,recursive=TRUE,showWarnings=FALSE)
+
+# Funcionalidades de apresentacao: nenhum arquivo ausente derruba o relatorio.
+fmt_int <- function(x) format(x,big.mark=".",scientific=FALSE,trim=TRUE)
+md <- function(x) cat(paste0(x,"\n\n"))
+label_file <- function(x) gsub("_"," ",sub("\\.[^.]+$","",basename(x)))
+relative <- function(f) {
+ f <- normalizePath(f,winslash="/",mustWork=FALSE)
+ pre <- paste0(project_root,"/")
+ if (startsWith(f,pre)) substring(f,nchar(pre)+1L) else f
+}
+files_under <- function(path,pattern=NULL,recursive=TRUE) {
+ base <- if (startsWith(path,project_root)) path else P(path)
+ if (!dir.exists(base)) return(character())
+ z <- list.files(base,pattern=pattern,recursive=recursive,full.names=TRUE,
+                 all.files=FALSE,include.dirs=FALSE)
+ z[file.exists(z) & !dir.exists(z)]
+}
+first_exists <- function(paths) {
+ if (!length(paths)) return(NA_character_)
+ z <- paths[file.exists(paths)]
+ if (length(z)) z[[1]] else NA_character_
+}
+safe_read <- function(file) {
+ if (is.na(file) || !file.exists(file)) return(NULL)
+ tryCatch(data.table::fread(file,na.strings=c("NA","NaN","NULL",""),
+                            showProgress=FALSE),
+          error=function(e) { md(paste0("**Falha de leitura:** `",relative(file),"` — ",conditionMessage(e))); NULL })
+}
+file_note <- function(file,missing_ok=TRUE) {
+ if (is.na(file)||!file.exists(file)) {
+   if (missing_ok) md("*Ainda não há arquivo para esta etapa; nenhum resultado foi inferido.*")
+   return(invisible(FALSE))
+ }
+ md(sprintf("<small>Fonte: <code>%s</code></small>",htmltools::htmlEscape(relative(file))))
+ invisible(TRUE)
+}
+show_table <- function(path, heading=NULL, essential=FALSE, max_rows=params$max_rows_table) {
+ f <- if (grepl("^(/|[A-Za-z]:)",path)) path else P(path)
+ if (!file.exists(f)) {
+   if (essential) md(paste0("**Pendente:** `",relative(f),"`."))
+   return(invisible(FALSE))
+ }
+ x <- safe_read(f)
+ if (is.null(x)) return(invisible(FALSE))
+ if (!is.null(heading)) md(paste0("**",heading,"**"))
+ if (ncol(x)==0L) {md("*Tabela vazia (sem colunas).* ");return(invisible(TRUE))}
+ n <- nrow(x)
+ lim <- if(isTRUE(params$show_all_rows)) n else max(1L,as.integer(max_rows))
+ # Evitar colunas com listas ou objetos aninhados nas tabelas HTML.
+ y <- head(x,lim)
+ for(nm in names(y)) {
+   if(is.list(y[[nm]])) y[[nm]] <- vapply(y[[nm]], function(v) paste(v,collapse="; "),character(1))
+ }
+ if(n > lim) md(sprintf("*Exibindo %s de %s linhas; tabela integral preservada no TSV original.*",fmt_int(lim),fmt_int(n)))
+ if (n==0L) md("*Tabela gerada com zero registros.*")
+ else {
+   print(knitr::kable(as.data.frame(y), format="html", row.names=FALSE,
+                      escape=TRUE,table.attr='class="table table-striped table-condensed"'))
+   cat("\n\n")
+ }
+ file_note(f)
+ invisible(TRUE)
+}
+show_many_tables <- function(directory, names, heading=NULL, missing=FALSE, max_rows=params$max_rows_table) {
+ if(!is.null(heading)) md(paste0("### ",heading))
+ for(nm in names) {
+   f <- P("results","deconvolution",directory,nm)
+   show_table(f,heading=label_file(nm),essential=missing,max_rows=max_rows)
+ }
+}
+show_figures <- function(directory, pattern="\\.(png|jpg|jpeg)$", label=NULL) {
+ base <- P("results","deconvolution",directory)
+ pics <- files_under(base,pattern=pattern,recursive=TRUE)
+ if (length(pics)) {
+   # Nao repetir figuras (p.ex. links simbolicos ou copias identificas por caminho).
+   pics <- unique(pics)
+   if (!isTRUE(params$show_all_figures)) pics <- head(pics,8L)
+   pics <- head(pics,max(1L,as.integer(params$max_figures_per_stage)))
+   if(!is.null(label)) md(paste0("### ",label))
+   for(f in pics) {
+     md(paste0("**Figura — ",gsub("_"," ",tools::file_path_sans_ext(basename(f))),"**"))
+     # include_graphics gera o link que knitr/pandoc incorporara no HTML autocontido.
+     tryCatch(print(knitr::include_graphics(f,rel_path=FALSE)),error=function(e)
+       md(paste0("*Nao foi possivel incluir a figura: ",conditionMessage(e),"*")))
+     cat("\n\n")
+     md(sprintf("<small>Arquivo: <code>%s</code></small>",htmltools::htmlEscape(relative(f))))
+   }
+ } else md("*Nenhuma figura salva nesta etapa.*")
+ invisible(length(pics))
+}
+# Evitar dependencia direta do namespace htmltools para situacoes onde somente
+# knitr/rmarkdown/data.table estao disponiveis (htmltools e dependencia de rmarkdown).
+
+SHOW_FILES <- list(
+ `00`="mathys2019/audit",`01`="mathys2019/metadata",
+ `02`="mathys2019/gene_harmonization",`03`="mathys2019/reference_build",
+ `04`="mathys2019/marker_derivation",`05`="bulk_preparation",
+ `06`="MuSiC2",`06c`="MuSiC_Audit",`06d`="MuSiC_Marker_Sensitivity",
+ `06e`="MuSiC_FullGene_Audit",`06f`="MuSiC_Synthetic_Validation",
+ `06g`="MuSiC2_Synthetic_Validation_06g/full",
+ `07`="BisqueRNA",`07b`="BisqueRNA_Audit",`07d`="BisqueRNA_Audit/07d",
+ `08`="dtangle",`08b`="dtangle/08b_auditoria_marcadores",
+ `08c`="dtangle/08c_sensitivity",`08d`="dtangle/08d_synthetic_validation",
+ `08e`="dtangle/08e_replicacao_orientador",`08f`="dtangle/08f_synthetic_validation",
+ `09`="Integrated_Comparison/09",`10`="Integrated_Comparison/10_metadata",
+ `10b`="Integrated_Comparison/10_metadata/10b_GEO",
+ `11`="Integrated_Comparison/11_adjusted",`12`="bMIND_pilot"
+)
+# Coleta para rastreabilidade — resultados, nunca data/raw ou arquivos pesados RDS.
+all_files <- files_under(OUT_DIR,recursive=TRUE)
+file_manifest <- data.table(path=vapply(all_files,relative,character(1)),
+  extension=tolower(tools::file_ext(all_files)),
+  size_kb=round(as.numeric(file.info(all_files)$size)/1024,2),
+  modified=as.character(file.info(all_files)$mtime))
+if (nrow(file_manifest)) {
+  fwrite(file_manifest,file.path(REPORT_DIR,"02_deconvolution_file_manifest.tsv"),sep="\t")
+}
+file_stats <- rbindlist(lapply(names(SHOW_FILES),function(k){
+  x <- files_under(P("results","deconvolution",SHOW_FILES[[k]]),recursive=TRUE)
+  data.table(etapa=k,pasta=SHOW_FILES[[k]],arquivos=length(x),
+             tabelas=sum(grepl("\\.(tsv|csv)$",x,ignore.case=TRUE)),
+             figuras=sum(grepl("\\.(png|jpg|jpeg|pdf)$",x,ignore.case=TRUE)),
+             disponivel=dir.exists(P("results","deconvolution",SHOW_FILES[[k]])))
+}),fill=TRUE)
+```
+
+> **Leitura do relatório:** este documento reúne as saídas existentes dos scripts de deconvolução e auditoria. A ausência de uma tabela ou figura é sinalizada, não preenchida com valores estimados. Métricas das misturas sintéticas não constituem validação externa em tecidos bulk reais. Resultados exploratórios não são tratados como inferência ajustada.
+
+# Escopo, rastreabilidade e estado das etapas
+
+A deconvolução emprega a referência snRNA-seq de Mathys et al. (2019), córtex pré-frontal BA10, com oito tipos celulares: **Ex, In, Ast, Oli, Opc, Mic, End e Per**. Foram analisadas separadamente as coortes ROSMAP e GSE125583 (AD), GSE64810 (HD) e GSE68719 (PD). As 44 amostras controle compartilhadas entre HD e PD não devem ser contabilizadas como observações independentes em análises conjuntas.
+
+```{r status-inventario, results='asis'}
+md(paste0("**Raiz do projeto:** `",project_root,"`"))
+md("### Inventário das etapas")
+print(knitr::kable(file_stats, format="html",row.names=FALSE,escape=TRUE))
+cat("\n\n")
+md("O inventário completo (incluindo arquivos de execuções individuais) foi salvo em `results/reports/deconvolution/02_deconvolution_file_manifest.tsv`.")
+```
+
+**Limitações de interpretação.** O relatório distingue: integridade de execução, convergência, acurácia sintética, concordância entre métodos, comparação exploratória caso–controle e modelos ajustados. Um resultado `PASS` não prova exatidão biológica; uma alta correlação entre métodos não garante concordância nas proporções absolutas.
+
+# Referência Mathys 2019: auditorias e preparação
+
+## 00 — Auditoria dos arquivos originais
+
+Conferência das dimensões dos arquivos, integridade dos identificadores, núcleos por doador e tipo celular, suporte de metadados e possíveis doadores compartilhados com ROSMAP.
+
+```{r mathys-00, results='asis'}
+show_many_tables("mathys2019/audit",c(
+ "00_audit_status.tsv","00_matrix_audit.tsv","00_gene_identifier_audit.tsv",
+ "00_cell_metadata_summary.tsv","00_celltype_donor_coverage.tsv",
+ "00_donor_mapping_summary.tsv","00_donor_overlap_ROSMAP_summary.tsv",
+ "00_file_audit.tsv"),missing=TRUE)
+show_figures("mathys2019/audit")
+```
+
+## 01 — Seleção dos doadores sem patologia
+
+A referência principal utiliza os doadores rotulados **no-pathology** na documentação de Mathys. A composição da referência é descrita por indivíduos, núcleos e cobertura dos oito tipos celulares.
+
+```{r mathys-01, results='asis'}
+show_many_tables("mathys2019/metadata",c(
+ "01_prepare_metadata_status.tsv","01_reference_selection_summary.tsv",
+ "01_pathology_group_counts_final.tsv","01_pathology_free_diagnosis_crosscheck.tsv",
+ "01_pathology_free_celltype_coverage.tsv","01_pathology_free_donor_celltype_qc.tsv",
+ "01_pathology_free_overlap_ROSMAP_summary.tsv"),missing=TRUE)
+show_figures("mathys2019/metadata")
+```
+
+## 02 — Harmonização dos identificadores gênicos
+
+Conversão de símbolos da referência para NCBI GeneID, com registro dos mapeamentos diretos, recuperados por aliases, ambíguos e ausentes. A identificação e resolução dos genes deve anteceder a integração com bulk.
+
+```{r mathys-02, results='asis'}
+show_many_tables("mathys2019/gene_harmonization",c(
+ "02_harmonization_status.tsv","02_harmonization_summary.tsv",
+ "02_mapping_method_summary.tsv","02_duplicated_geneids.tsv",
+ "02_annotation_versions.tsv","02_alias_rescued.tsv","02_unmapped_symbols.tsv"),missing=TRUE)
+show_figures("mathys2019/gene_harmonization")
+```
+
+## 03 — Construção da referência e pseudobulks
+
+Agregação por doador e tipo celular, mantendo a matriz de contagens por núcleo para os algoritmos que a exigem. Combinações ausentes doador–tipo não são convertidas em observações artificiais com zero.
+
+```{r mathys-03, results='asis'}
+show_many_tables("mathys2019/reference_build",c(
+ "03_reference_build_status.tsv","03_reference_build_summary.tsv",
+ "03_pseudobulk_celltype_summary.tsv","03_donor_celltype_pseudobulk_coverage.tsv",
+ "03_reference_sensitivity_summary.tsv","03_counts_by_mapping_method.tsv"),missing=TRUE)
+show_figures("mathys2019/reference_build")
+```
+
+## 04 — Seleção e auditoria dos marcadores
+
+Os conjuntos top100, top300 e top500 foram derivados da própria referência, considerando especificidade, expressão e detecção. Nas validações leave-one-donor-out, os marcadores devem ser recalculados **sem** o doador de teste.
+
+```{r mathys-04, results='asis'}
+show_many_tables("mathys2019/marker_derivation",c(
+ "04_marker_derivation_status.tsv","04_marker_set_summary.tsv",
+ "04_celltype_reference_support.tsv","04_marker_set_nesting.tsv",
+ "04_top300_robustness_by_celltype.tsv","04_pairwise_marker_overlap.tsv",
+ "04_marker_score_parameters.tsv"),missing=TRUE)
+show_figures("mathys2019/marker_derivation")
+```
+
+## 05 — Harmonização e preparação das matrizes bulk
+
+Genes presentes em cada bulk foram intersectados com a referência. Os denominadores para CPM foram calculados sobre as bibliotecas completas, antes da seleção das assinaturas, para não alterar artificialmente a escala entre estudos.
+
+```{r mathys-05, results='asis'}
+show_many_tables("bulk_preparation",c(
+ "05_status.tsv","05_dataset_summary.tsv","05_marker_set_coverage.tsv",
+ "05_marker_coverage_by_dataset_celltype.tsv","05_input_resolution.tsv"),missing=TRUE)
+show_figures("bulk_preparation")
+```
+
+# MuSiC2: deconvolução, auditorias e validação
+
+## 06 — Execução principal de MuSiC2
+
+As análises utilizaram as contagens não log-transformadas e referência Mathys sem patologia. `markers = NULL` não corresponde ao transcriptoma inteiro quando as matrizes de entrada foram previamente reduzidas à união de top300.
+
+```{r music-06, results='asis'}
+show_many_tables("MuSiC2",c(
+ "06_status.tsv","06_run_summary.tsv","06_proportion_summary_all.tsv",
+ "06_ROSMAP_reference_overlap_sensitivity.tsv","06_run_plan.tsv",
+ "06_api_audit.tsv"),missing=TRUE)
+show_figures("MuSiC2",label="Figuras produzidas pelas etapas 06/06b")
+```
+
+**Interpretação:** estimativas praticamente nulas de In e Opc e problemas de convergência nas coortes reais devem ser reportados como limitações técnicas. Não representam ausência biológica desses tipos celulares.
+
+## 06c — MuSiC convencional versus inicialização e resultado do MuSiC2
+
+Investigação da origem dos zeros de In e Opc. A comparação permite verificar se a dificuldade já existia na solução inicial, antes das iterações adicionais.
+
+```{r music-06c, results='asis'}
+show_many_tables("MuSiC_Audit",c(
+ "06c_status.tsv","06c_celltype_summary_all.tsv","06c_celltype_summary.tsv",
+ "06c_nonzero_counts.tsv","06c_reference_profile_similarity.tsv",
+ "06c_parameters.tsv"),missing=TRUE)
+show_figures("MuSiC_Audit")
+```
+
+## 06d — Sensibilidade ao número de marcadores
+
+Comparação top100, top300 e top500, com atenção à estabilidade das proporções e frequência de zeros.
+
+```{r music-06d, results='asis'}
+show_many_tables("MuSiC_Marker_Sensitivity",c(
+ "06d_input_audit.tsv","06d_celltype_summary.tsv",
+ "06d_comparison_to_top300.tsv"),missing=TRUE)
+show_figures("MuSiC_Marker_Sensitivity")
+```
+
+## 06e — Universo gênico e ponderação
+
+Investigação com todos os genes compartilhados e comparação entre estimativas ponderadas e não ponderadas do MuSiC.
+
+```{r music-06e, results='asis'}
+show_many_tables("MuSiC_FullGene_Audit",c(
+ "06e_status.tsv","06e_input_audit.tsv","06e_summary_by_dataset_celltype.tsv",
+ "06e_paired_contrasts.tsv","06e_top300_reproduction.tsv",
+ "06e_reference_library_by_celltype.tsv"),missing=TRUE)
+show_figures("MuSiC_FullGene_Audit")
+```
+
+## 06f — Validação interna do MuSiC convencional e NNLS
+
+Misturas pseudobulk de proporções conhecidas, com exclusão dos doadores de teste. **O teste 06f não constitui validação direta da iteração do MuSiC2.**
+
+```{r music-06f, results='asis'}
+show_many_tables("MuSiC_Synthetic_Validation",c(
+ "06f_status.tsv","06f_donor_selection.tsv","06f_mixture_design.tsv",
+ "06f_fit_audit.tsv","06f_metrics_by_run.tsv","06f_metrics_by_type.tsv"),missing=TRUE)
+show_figures("MuSiC_Synthetic_Validation")
+```
+
+## 06g — Validação direta do MuSiC2: composição e expressão simuladas
+
+A auditoria complementar considera quatro doadores independentes, cinco perfis de composição, quatro cenários (`baseline`, `composition_only`, `expression_only`, `both`) e dois conjuntos gênicos (`allgenes` e `top300_train_only`). O resultado final deve ser avaliado **por doador**, e não tratando misturas sintéticas do mesmo doador como replicações independentes.
+
+```{r music-06g-convergencia, results='asis'}
+gdir <- "MuSiC2_Synthetic_Validation_06g/full"
+grun <- P("results","deconvolution",gdir,"06g_run_summary.tsv")
+runs <- safe_read(grun)
+if (!is.null(runs) && all(c("run","status","converged","n_iterations") %in% names(runs))) {
+ runs[,gene_set:=vapply(strsplit(run,"__",fixed=TRUE),function(x) if(length(x)>1L)x[[2]] else NA_character_,character(1))]
+ cv <- runs[,.(execucoes=.N,PASS=sum(status=="PASS",na.rm=TRUE),
+              convergencia_global_TRUE=sum(converged %in% TRUE),
+              convergencia_global_FALSE=sum(converged %in% FALSE),
+              sem_info_global=sum(is.na(converged)),
+              iteracao_unica=sum(n_iterations==1,na.rm=TRUE),
+              sem_diagnostico_individual=if("n_not_converged" %in% names(runs))
+                 sum(is.na(n_not_converged)) else .N),by=gene_set]
+ md("### Resumo de execução e convergência")
+ print(knitr::kable(cv,format="html",row.names=FALSE)); cat("\n\n")
+ md("**Ressalva:** `converged = TRUE` informa convergência global. Um campo `n_not_converged = NA` não comprova ausência de amostras não convergidas.")
+} else md("*Execução 06g não encontrada ou sem as colunas esperadas.*")
+show_many_tables(gdir,c("06g_parameters.tsv","06g_folds.tsv"),missing=FALSE)
+```
+
+```{r music-06g-efeito, results='asis'}
+metrics <- safe_read(P("results","deconvolution",gdir,"06g_metrics_by_cell.tsv"))
+if(!is.null(metrics) && all(c("fold","gene_set","scenario","method","group","MAE_nuclear_pp") %in% names(metrics))) {
+ cases <- metrics[group=="Case",.(MAE_pp=mean(MAE_nuclear_pp,na.rm=TRUE)),
+                  by=.(fold,gene_set,scenario,method)]
+ foldcomp <- dcast(cases,fold+gene_set+scenario~method,value.var="MAE_pp")
+ if(all(c("MuSiC","MuSiC2") %in% names(foldcomp))) {
+   foldcomp[,delta_MuSiC2_menos_MuSiC := MuSiC2-MuSiC]
+   result <- foldcomp[,.(MAE_MuSiC=mean(MuSiC,na.rm=TRUE),
+        MAE_MuSiC2=mean(MuSiC2,na.rm=TRUE),
+        delta_pp=mean(delta_MuSiC2_menos_MuSiC,na.rm=TRUE),
+        doadores_MuSiC2_menor_erro=sum(delta_MuSiC2_menos_MuSiC<0,na.rm=TRUE),
+        n_doadores=.N),by=.(gene_set,scenario)]
+   for(j in c("MAE_MuSiC","MAE_MuSiC2","delta_pp")) result[,(j):=round(get(j),4)]
+   md("### MAE nuclear dos casos sintéticos — comparação pareada por doador")
+   print(knitr::kable(result[order(gene_set,scenario)],format="html",row.names=FALSE));cat("\n\n")
+   md("**Diferença negativa:** favorece MuSiC2. Os valores são descritivos, sem teste de superioridade com quatro doadores.")
+   if (requireNamespace("ggplot2",quietly=TRUE)) {
+     pl <- ggplot2::ggplot(result,ggplot2::aes(x=scenario,y=delta_pp,fill=gene_set))+
+       ggplot2::geom_col(position="dodge")+
+       ggplot2::geom_hline(yintercept=0,size=0.4)+
+       ggplot2::labs(title="MuSiC2 − MuSiC: diferença de MAE nuclear por cenário",
+                     x="Cenário",y="Diferença de MAE (pp)",fill="Conjunto de genes")+
+       ggplot2::theme_minimal(base_size=11)+
+       ggplot2::theme(axis.text.x=ggplot2::element_text(angle=25,hjust=1))
+     print(pl)
+   }
+ }
+ md("### Erros e vieses por tipo celular")
+ by_ct <- metrics[group=="Case",.(MAE_nuclear_pp=mean(MAE_nuclear_pp,na.rm=TRUE),
+     MAE_RNA_pp=mean(MAE_RNA_pp,na.rm=TRUE),
+     bias_nuclear_pp=mean(bias_nuclear_pp,na.rm=TRUE),
+     frac_zero_positive=mean(frac_zero_positive,na.rm=TRUE)),
+     by=.(gene_set,method,cell_type)]
+ for(j in c("MAE_nuclear_pp","MAE_RNA_pp","bias_nuclear_pp","frac_zero_positive")) by_ct[,(j):=round(get(j),4)]
+ print(knitr::kable(by_ct[order(gene_set,cell_type,method)],format="html",row.names=FALSE));cat("\n\n")
+ if(requireNamespace("ggplot2",quietly=TRUE)) {
+   md("### Figura — MAE nuclear por tipo celular no 06g")
+   ctplot <- ggplot2::ggplot(by_ct,ggplot2::aes(x=cell_type,y=MAE_nuclear_pp,fill=method))+
+      ggplot2::geom_col(position="dodge")+
+      ggplot2::facet_wrap(~gene_set,ncol=1)+
+      ggplot2::labs(x="Tipo celular",y="MAE nuclear (pp)",fill="Algoritmo")+
+      ggplot2::theme_minimal(base_size=11)
+   print(ctplot)
+ }
+ md("**Atenção:** MAE de fração nuclear e MAE da contribuição teórica de RNA são alvos diferentes. A contribuição de RNA não foi medida diretamente.")
+} else md("*Métricas completas de 06g indisponíveis; nenhuma comparação foi reconstruída.*")
+```
+
+```{r music-06g-DE, results='asis'}
+md("### Verificação da seleção de genes durante o refinamento")
+de_candidates <- c(
+ P("results","deconvolution",gdir,"06g_DE_detection_summary.tsv"),
+ P("results","deconvolution","MuSiC2_Synthetic_Validation_06g","06g_DE_detection_summary.tsv"),
+ P("06g_DE_detection_summary.tsv"))
+de_path <- first_exists(de_candidates)
+if(!is.na(de_path)) {
+ de <- safe_read(de_path)
+ if(!is.null(de)) {
+   for(j in intersect(c("precisao_media","sensibilidade_media"),names(de))) de[,(j):=round(100*get(j),2)]
+   md("*Precisão e sensibilidade apresentadas em porcentagem quando essas colunas estão disponíveis.*")
+   print(knitr::kable(de,format="html",row.names=FALSE));cat("\n\n")
+   file_note(de_path)
+ }
+} else {
+ all_de <- files_under(P("results","deconvolution",gdir,"runs"),
+                       pattern="^06g_DE_detection\\.tsv$",recursive=TRUE)
+ if(length(all_de)) {
+    de <- rbindlist(lapply(all_de,function(f){z<-safe_read(f);if(is.null(z))return(NULL)
+       run<-basename(dirname(f));parts<-strsplit(run,"__",fixed=TRUE)[[1]]
+       if(length(parts)>=4) z[,`:=`(gene_set=parts[2],scenario=parts[4])]
+       z}),fill=TRUE)
+    if(nrow(de) && all(c("gene_set","scenario","n_true_DE","n_removed","precision","recall") %in% names(de))) {
+      summar <- de[,.(execucoes=.N,verdadeiros=mean(n_true_DE),removidos=mean(n_removed),
+                         precisao_pct=100*mean(precision,na.rm=TRUE),
+                         sensibilidade_pct=100*mean(recall,na.rm=TRUE)),by=.(gene_set,scenario)]
+      print(knitr::kable(summar,format="html",row.names=FALSE));cat("\n\n")
+    }
+ } else md("*Não foi encontrado o consolidado `06g_DE_detection_summary.tsv` nem arquivos individuais de detecção. Execute a consolidação do 06g para completar esta avaliação.*")
+}
+show_many_tables(gdir,c("06g_summary_by_scenario.tsv","06g_paired_methods.tsv"),missing=FALSE,max_rows=20L)
+```
+
+# BisqueRNA: deconvolução e auditorias
+
+## 07 — Deconvolução principal
+
+As estimativas do BisqueRNA devem ser interpretadas considerando a transformação baseada na referência. A ausência de colapso de In/Opc não demonstra, por si só, acurácia.
+
+```{r bisque-07, results='asis'}
+show_many_tables("BisqueRNA",c("07_status.tsv","07_run_summary.tsv",
+  "07_proportion_summary_all.tsv","07_celltype_summary.tsv"),missing=FALSE)
+show_figures("BisqueRNA")
+```
+
+## 07b — Diagnósticos de normalização e estabilidade
+
+Comparação de opções de normalização e de comportamento entre amostras, sem seleção por significância de caso–controle.
+
+```{r bisque-07b, results='asis'}
+show_many_tables("BisqueRNA_Audit",c("07b_status.tsv","07b_comparison.tsv",
+ "07b_normalization_sensitivity.tsv"),missing=FALSE)
+show_figures("BisqueRNA_Audit",pattern="(^|/)07b[^/]*\\.(png|jpg|jpeg)$")
+```
+
+## 07d-A — Dependência da composição da referência
+
+Avalia como a representação relativa dos tipos celulares na referência afeta as frações estimadas no bulk.
+
+```{r bisque-07d-A, results='asis'}
+show_many_tables("BisqueRNA_Audit/07d/A",c("07d_A_reference_sample_sizes.tsv",
+ "07d_A_composition_dependence.tsv","07d_A_individual_fits.tsv"),missing=FALSE)
+show_figures("BisqueRNA_Audit/07d/A")
+```
+
+## 07d-B — Dependência do contexto bulk
+
+Testa se as mesmas amostras controle recebem proporções diferentes quando se acrescentam diferentes conjuntos de casos ao ajuste.
+
+```{r bisque-07d-B, results='asis'}
+show_many_tables("BisqueRNA_Audit/07d/B",c("07d_B_context_input_audit.tsv",
+ "07d_B_paired_context_differences.tsv","07d_B_control_means.tsv",
+ "07d_B_reproduction_07.tsv"),missing=FALSE)
+show_figures("BisqueRNA_Audit/07d/B")
+```
+
+## 07d-C — Validação sintética leave-one-donor-out
+
+Teste de recuperação de proporções conhecidas com reconstrução dos marcadores sem o doador de teste. Não deve ser convertido em comparação direta de MAE com 06g e 08f, pois os desenhos não são idênticos.
+
+```{r bisque-07d-C, results='asis'}
+show_many_tables("BisqueRNA_Audit/07d/C",c(
+ "07d_C_metrics_global.tsv","07d_C_metrics_by_type.tsv",
+ "07d_C_metrics_by_scenario.tsv","07d_C_metrics_by_holdout.tsv",
+ "07d_C_support.tsv","07d_C_holdout_support.tsv"),missing=FALSE)
+show_figures("BisqueRNA_Audit/07d/C")
+show_figures("BisqueRNA_Audit/07d/plots",label="Figuras das auditorias 07d-A, 07d-B e 07d-C")
+show_many_tables("BisqueRNA_Audit/07d",c("07d_status.tsv","07d_run_parameters.tsv"),missing=FALSE)
+```
+
+# dtangle: deconvolução e validações
+
+## 08 — Configuração original
+
+A configuração inicial com perfis doador–tipo apresentou grande sensibilidade para End e Per. É preservada como auditoria e não deve ser confundida com as configurações posteriores 08e.
+
+```{r dtangle-08, results='asis'}
+show_many_tables("dtangle",c("08_status.tsv","08_run_summary.tsv",
+ "08_reference_pseudobulk_audit.tsv","08_celltype_summary.tsv"),missing=FALSE)
+show_figures("dtangle",pattern="(^|/)08_[^/]*\\.(png|jpg|jpeg)$")
+```
+
+## 08b — Auditoria dos marcadores e do suporte vascular
+
+Inclui suporte desigual da referência para End e Per e especificidade dos marcadores.
+
+```{r dtangle-08b, results='asis'}
+show_many_tables("dtangle/08b_auditoria_marcadores",c(
+ "08b_marker_audit.tsv","08b_reference_support.tsv","08b_status.tsv"),missing=FALSE)
+show_figures("dtangle/08b_auditoria_marcadores")
+```
+
+## 08c — Sensibilidade à referência e à normalização
+
+Comparação de perfis doador–tipo versus perfis agrupados por tipo, com e sem normalização quantílica.
+
+```{r dtangle-08c, results='asis'}
+show_many_tables("dtangle/08c_sensitivity",c("08c_status.tsv",
+ "08c_sensitivity_summary.tsv","08c_celltype_summary.tsv",
+ "08c_errors.tsv"),missing=FALSE)
+show_figures("dtangle/08c_sensitivity")
+```
+
+## 08d — Validação sintética de configurações do dtangle
+
+Comparações entre representações da referência e normalizações; observar erros por tipo e cenários.
+
+```{r dtangle-08d, results='asis'}
+show_many_tables("dtangle/08d_synthetic_validation",c(
+ "08d_status.tsv","08d_metrics_by_condition.tsv","08d_metrics_by_type.tsv",
+ "08d_metrics_by_scenario.tsv","08d_metrics_by_holdout.tsv",
+ "08d_paired_improvements.tsv"),missing=FALSE)
+show_figures("dtangle/08d_synthetic_validation")
+```
+
+## 08e — Reprodução da configuração proposta pelo orientador
+
+Utiliza todos os genes compartilhados, oito perfis agregados e marcadores selecionados automaticamente, distinguindo `pooled_counts` e `mean_nucleus_cpm`.
+
+```{r dtangle-08e, results='asis'}
+show_many_tables("dtangle/08e_replicacao_orientador",c(
+ "08e_status.tsv","08e_run_summary.tsv","08e_celltype_summary.tsv",
+ "08e_reference_support.tsv","08e_comparison_with_08c.tsv"),missing=FALSE)
+show_figures("dtangle/08e_replicacao_orientador")
+```
+
+## 08f — Validação sintética da configuração 08e
+
+Quatro doadores separados do treinamento e nove cenários por doador. As frações nucleares e a contribuição teórica de RNA são alvos diferentes e devem ser reportadas separadamente.
+
+```{r dtangle-08f, results='asis'}
+show_many_tables("dtangle/08f_synthetic_validation",c(
+ "08f_status.tsv","08f_metrics_global.tsv","08f_metrics_by_type.tsv",
+ "08f_metrics_by_scenario.tsv","08f_paired_summary_by_type.tsv",
+ "08f_fold_audit.tsv","08f_parameters.tsv"),missing=FALSE)
+show_figures("dtangle/08f_synthetic_validation")
+```
+
+# 09 — Comparação integrada dos três algoritmos
+
+A comparação contempla as quatro coortes, oito tipos celulares, concordância de ordenação (Spearman), diferenças absolutas de proporções, zeros, variação entre amostras e diferenças exploratórias caso–controle. A seleção do algoritmo não deve se basear apenas em resultados biologicamente esperados ou no menor valor de p.
+
+```{r metodos-09, results='asis'}
+show_many_tables("Integrated_Comparison/09",c(
+ "09_status.tsv","09_cobertura_amostras.tsv","09_concordancia_metodos.tsv",
+ "09_celltype_variability_quality.tsv","09_validity_context_methods.tsv",
+ "09_validation_synthetic_context_by_type.tsv","09_MuSiC2_convergence_context.tsv",
+ "09_BisqueRNA_run_degeneracy_context.tsv","09_case_control_exploratory.tsv",
+ "09_directional_robustness_descriptive.tsv","09_dtangle_reference_sensitivity.tsv",
+ "09_AD_ROSMAP_vs_GSE125583_decision_matrix.tsv",
+ "09_collapse_rule_global.tsv","09_controles_compartilhados_HD_PD.tsv"),missing=FALSE)
+show_figures("Integrated_Comparison/09",label="Todos os gráficos produzidos pela comparação 09")
+```
+
+**Limitação inferencial:** os contrastes exploratórios da etapa 09 podem ter sido calculados por Wilcoxon e bootstrap, sem ajuste por idade, sexo, RIN, PMI ou lote. O relatório não os classifica como resultados ajustados. Correlação alta entre dois métodos não comprova concordância das suas proporções absolutas.
+
+## Síntese dos critérios de qualidade por método
+
+| Método | Evidência favorável | Limitações principais | Utilização provisória |
+|:---|:---|:---|:---|
+| MuSiC2 | Execução de misturas sintéticas e recuperação parcial de composição | Falhas nas coortes reais; In/Opc próximos de zero; refinamento sem benefício consistente em 06g | Comparação metodológica e análise condicionada à qualidade |
+| BisqueRNA | Recuperação de In e capacidade de acompanhar parte das variações sintéticas | Sensibilidade à referência e ao contexto bulk; vieses por tipo | Alternativa para sensibilidade, condicionada a auditorias |
+| dtangle | Referência agrupada reduziu distorção vascular; 08f avaliou a configuração 08e | Dependência de perfil de referência, marcadores e tipo do alvo (núcleos/RNA) | Candidato provisório para frações de entrada do bMIND |
+
+Os valores de MAE dos três métodos **não** constituem ranking quantitativo direto porque seus testes sintéticos não empregaram exatamente o mesmo desenho, alvo e distribuição de misturas. O mesmo vale para interpretações de tipos raros: zeros estimados não são prova de ausência celular.
+
+# Metadados e análises ajustadas
+
+## 10 e 10b — Auditoria e recuperação de covariáveis
+
+A presença de idade, sexo, RIN, PMI, lote e outras covariáveis precisa ser verificada por amostra, com identificação da fonte. Ausência na tabela preparada não implica ausência nos estudos originais.
+
+```{r audit-10, results='asis'}
+show_many_tables("Integrated_Comparison/10_metadata",c(
+ "10_status.tsv","10_dataset_coverage.tsv",
+ "10_covariate_dictionary.tsv","10_covariate_coverage_by_group.tsv",
+ "10_INTERPRETATION_NOTES.tsv","10_MODEL_PLAN_TEMPLATE.tsv"),missing=FALSE)
+show_many_tables("Integrated_Comparison/10_metadata/10b_GEO",c(
+ "10b_source_manifest.tsv","10b_REVIEW_NOTES.tsv"),missing=FALSE)
+```
+
+## 11 — Modelos ajustados caso–controle
+
+O script 11 exige um plano de covariáveis aprovado explicitamente. **Não declarar modelos ajustados executados se o estado for `PENDING_APPROVAL`**. Contrastes de OLS/HC3 em pontos percentuais e sensibilidade CLR em log-ratios não são diretamente intercambiáveis.
+
+```{r modelos-11, results='asis'}
+show_many_tables("Integrated_Comparison/11_adjusted",c(
+ "11_status.tsv","11_README_STATUS.tsv","11_design_audit.tsv",
+ "11_adjusted_pp_HC3.tsv","11_clr_sensitivity.tsv",
+ "11_clr_epsilon_stability.tsv","11_included_excluded_samples.tsv",
+ "11_covariate_balance.tsv"),missing=FALSE)
+show_figures("Integrated_Comparison/11_adjusted")
+```
+
+# 12–12f — Piloto e auditorias do bMIND
+
+**O bMIND estima expressão gênica específica de tipo celular por indivíduo, condicionada às frações fornecidas.** Ele não é um quarto método de estimação independente de proporções. A melhora de diagnósticos MCMC após mudanças de prior não demonstra, por si só, precisão biológica.
+
+```{r bmind-find, results='asis'}
+broot <- P("results","deconvolution","bMIND_pilot")
+bfiles <- files_under(broot,recursive=TRUE)
+if(length(bfiles)) {
+  candidates <- bfiles[grepl("(^|/)(12|12b|12c|12d|12e|12f)_(status|input_summary|fraction_readiness|gene_panel|configs|runs|diagnostics|summary|flagged|stratified_panel|selection_strata)\\.tsv$",bfiles,ignore.case=TRUE)]
+  summary_bm <- data.table(path=vapply(candidates,relative,character(1)),
+           kb=round(as.numeric(file.info(candidates)$size)/1024,1))
+  md("### Arquivos disponíveis do piloto")
+  print(knitr::kable(summary_bm,format="html",row.names=FALSE));cat("\n\n")
+} else md("*Nenhum resultado do piloto bMIND encontrado.*")
+```
+
+## 12 — Preparação e execução piloto
+
+```{r bmind-12, results='asis'}
+b12 <- files_under(broot,pattern="^12_(status|input_summary|fraction_readiness|gene_panel)\\.tsv$",recursive=TRUE)
+for(f in head(b12,16L)) show_table(f,heading=label_file(f),max_rows=35L)
+```
+
+## 12b–12c — Diagnósticos e verificação da implementação
+
+```{r bmind-12bc, results='asis'}
+bbc <- files_under(broot,pattern="^12(b|c)_(status|diagnostics|posterior_summary|failures)\\.tsv$",recursive=TRUE)
+for(f in head(bbc,24L)) show_table(f,heading=paste(basename(dirname(f)),basename(f)),max_rows=35L)
+```
+
+## 12d–12e — Sensibilidade e confirmação do prior residual
+
+```{r bmind-12de, results='asis'}
+bde <- files_under(broot,pattern="^12(d|e)_(status|configs|runs|diagnostics|summary|flagged)\\.tsv$",recursive=TRUE)
+for(f in head(bde,30L)) show_table(f,heading=paste(basename(dirname(f)),basename(f)),max_rows=35L)
+```
+
+## 12f — Painel estratificado por intensidade e variabilidade
+
+```{r bmind-12f, results='asis'}
+bf <- files_under(broot,pattern="^12f_(status|stratified_panel|selection_strata|diagnostics|summary|flagged)\\.tsv$",recursive=TRUE)
+for(f in head(bf,20L)) show_table(f,heading=paste(basename(dirname(f)),basename(f)),max_rows=35L)
+```
+
+```{r bmind-figures, results='asis'}
+show_figures("bMIND_pilot",pattern="\\.(png|jpg|jpeg)$",label="Figuras existentes das auditorias bMIND")
+pdfs <- files_under(broot,pattern="\\.pdf$",recursive=TRUE)
+if(length(pdfs)) {
+ md("### Gráficos diagnósticos em PDF produzidos pelo piloto")
+ md(paste0("**PDFs localizados:** ",length(pdfs),". As páginas são preservadas em seus arquivos originais."))
+ if(requireNamespace("pdftools",quietly=TRUE)) {
+   # Converter a primeira página de cada PDF, como prévia de gráficos de cadeias MCMC.
+   # Para incluir mais arquivos, aumente params$pdf_preview_max.
+   thumbs <- file.path(REPORT_DIR,"pdf_previews")
+   dir.create(thumbs,recursive=TRUE,showWarnings=FALSE)
+   selected <- head(pdfs,max(0L,as.integer(params$pdf_preview_max)))
+   for(i in seq_along(selected)) {
+     f <- selected[[i]]
+     dest <- file.path(thumbs,sprintf("12_preview_%03d.png",i))
+     err <- tryCatch({
+       pdftools::pdf_convert(pdf=f,format="png",dpi=100,pages=1,
+                             filenames=dest,verbose=FALSE)
+       NA_character_
+     },error=function(e) conditionMessage(e))
+     if(is.na(err) && file.exists(dest)) {
+       md(paste0("**Prévia — ",basename(f)," (página 1)**"))
+       print(knitr::include_graphics(dest,rel_path=FALSE)); cat("\n\n")
+     } else md(paste0("*Não foi possível converter: `",relative(f),"` — ",err,"*"))
+   }
+   if(length(pdfs)>length(selected)) md(paste0("*As demais ",length(pdfs)-length(selected),
+        " figuras em PDF constam do manifesto integral. Para ampliar as prévias, ajuste `pdf_preview_max`.*"))
+ } else md("*Pacote opcional `pdftools` não instalado: os PDFs foram catalogados, mas não convertidos em prévias PNG.*")
+ for(f in pdfs) md(paste0("- `",relative(f),"`"))
+}
+```
+
+# Arquivos adicionais e auditoria final de cobertura
+
+A seção abaixo identifica tabelas e gráficos que não aparecem na seleção de tabelas principais acima, preservando a rastreabilidade de **todos os testes executados**. Para evitar um HTML impraticável, arquivos brutos com milhares de observações são catalogados por nome, tamanho e localização; apenas as tabelas principais são exibidas no corpo do relatório.
+
+```{r extras, results='asis'}
+# Identificar a cobertura por tipo de arquivo e pasta de resultado.
+files_without_runs <- file_manifest[!grepl("/runs/",path,fixed=TRUE)]
+files_without_runs[,group:=sub("^results/deconvolution/([^/]+).*$","\\1",path)]
+groups <- files_without_runs[,.(arquivos=.N,
+   tabelas=sum(extension %in% c("tsv","csv")),
+   figuras=sum(extension %in% c("png","jpg","jpeg","pdf")),
+   arquivos_de_log=sum(extension %in% c("txt","log"))),by=group]
+if(nrow(groups)) {
+ print(knitr::kable(groups[order(group)],format="html",row.names=FALSE));cat("\n\n")
+}
+md(paste0("**Arquivos totais indexados:** ",fmt_int(nrow(file_manifest)),"."))
+md("A lista integral de caminhos foi exportada em `results/reports/deconvolution/02_deconvolution_file_manifest.tsv`.")
+if(isTRUE(params$include_all_tables)) {
+ md("## Apêndice — Todas as tabelas TSV/CSV não pertencentes às execuções individuais")
+ tabs <- files_under(OUT_DIR,pattern="\\.(tsv|csv)$",recursive=TRUE)
+ tabs <- tabs[!grepl("/runs/",tabs,fixed=TRUE)]
+ for(f in tabs) show_table(f,heading=relative(f),max_rows=params$max_rows_table)
+} else {
+ md("Para incluir também todas as tabelas TSV/CSV de saída no HTML, use `include_all_tables = TRUE`. O relatório pode ficar muito grande; tabelas individuais continuam disponíveis no manifesto.")
+}
+```
+
+# Notas finais para a redação do TCC
+
+- As auditorias **06c–06f** não são descartadas pelo 06g: explicam o comportamento da estimação básica e a influência de marcadores e ponderação. O **06g** é a avaliação direta complementar do refinamento iterativo do MuSiC2.
+- As análises **07d**, **08d** e **08f** avaliam diferentes limitações da referência, calibração e construções de perfis, mas não estabelecem automaticamente um algoritmo vencedor.
+- Os resultados de **09** são principalmente exploratórios. Os resultados de **11** devem aparecer como inferência ajustada somente quando efetivamente produzidos após aprovação do plano.
+- O **bMIND** é exploratório enquanto suas decisões de prior, diagnóstico e validação de expressão específica por tipo ainda estiverem em avaliação.
+- A escolha das frações para o bMIND deve ser feita com base em qualidade e robustez; `dtangle/pooled_counts` é uma opção provisória já usada no piloto, e BisqueRNA pode servir como sensibilidade, sujeita à decisão do orientador.
+- As quatro coortes e os controles compartilhados entre HD e PD devem ser explicitamente identificados. Resultados de ROSMAP e GSE125583 não devem ser combinados sem decisão analítica e justificativa de região cerebral.
+
+```{r reproducibilidade, results='asis'}
+md(paste0("**Relatório renderizado em:** ",format(Sys.time(),"%d/%m/%Y %H:%M:%S %Z")))
+md("**Informações da sessão de renderização:**")
+cat("```\n",paste(capture.output(sessionInfo()),collapse="\n"),"\n```\n\n",sep="")
+```

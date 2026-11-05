@@ -44,3 +44,6 @@ Thumbs.db
 
 # Arquivos temporarios de consulta ao Synapse
 /mathys2019_synapse_files.txt
+
+# Matrizes brutas do ROSMAP
+/data/raw/ROSMAP/

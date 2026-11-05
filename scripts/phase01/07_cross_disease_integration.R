@@ -35,6 +35,12 @@
 #       AD∩HD, AD∩PD e HD∩PD.
 #
 # 6. Manter integração funcional por GSEA e ORA.
+# 7. Auditar por GeneID os dez candidatos de Alharbi et al. (2025)
+#    e a identidade exata da interseção nominal AD-HD-PD.
+# 8. Detalhar os termos de ORA compartilhados em HD e PD, por All/Up/Down.
+# 9. Realizar ORA exploratória com os genes da interseção nominal tripla,
+#    usando o universo testável comum como fundo; não é análise confirmatória.
+# 10. Garantir títulos legíveis nos três diagramas de Venn.
 #
 # CHAVE GÊNICA
 # ------------------------------------------------------------------------------
@@ -797,6 +803,10 @@ create_venn_plot <- function(
     )
   )
 
+  # Evitar corte dos titulos longos no PNG e no relatorio HTML.
+  titulo_curto <- paste(strwrap(title, width = 38), collapse = "\n")
+  subtitulo_curto <- paste(strwrap(subtitle, width = 75), collapse = "\n")
+
   p <- ggplot() +
 
     geom_polygon(
@@ -889,8 +899,8 @@ create_venn_plot <- function(
     ) +
 
     labs(
-      title = title,
-      subtitle = subtitle
+      title = titulo_curto,
+      subtitle = subtitulo_curto
     ) +
 
     theme_void() +
@@ -899,20 +909,22 @@ create_venn_plot <- function(
       legend.position = "none",
 
       plot.title = element_text(
-        size = 22,
-        face = "bold"
+        size = 17,
+        face = "bold",
+        hjust = 0.5,
+        lineheight = 1.12,
+        margin = margin(b = 7)
       ),
 
       plot.subtitle = element_text(
-        size = 13
+        size = 11,
+        hjust = 0.5,
+        lineheight = 1.15,
+        margin = margin(b = 10)
       ),
 
-      plot.margin = margin(
-        20,
-        20,
-        20,
-        20
-      )
+      plot.title.position = "plot",
+      plot.margin = margin(35, 65, 30, 65)
     )
 
   return(p)
@@ -1494,6 +1506,181 @@ venn_article_like <- calculate_venn_regions(
 )
 
 
+
+# ==============================================================================
+# 15b. GENES DA INTERSECAO NOMINAL E COMPARACAO COM ALHARBI ET AL. (2025)
+#
+# Tabela 3 do artigo: DOI 10.3390/cimb47120976.
+# Os efeitos do artigo sao apresentados como "logFC"; nao se presume que a
+# escala seja diretamente comparavel ao log2FoldChange do nosso DESeq2.
+# A correspondencia gene a gene e feita EXCLUSIVAMENTE por NCBI GeneID.
+# O simbolo serve para localizar os IDs candidatos na anotacao e indicar
+# possiveis ambiguidades / discrepancias entre as anotacoes.
+# ==============================================================================
+
+artigo_2025 <- data.table(
+  gene_artigo = c("H19", "CCL2", "CSF3", "IL17REL", "MMP9",
+                  "PDLIM1", "MMRN1", "SLPI", "S100A8", "S100A9"),
+  logFC_artigo_AD = c(-2.335, -2.810, -1.013, -1.230, -1.508,
+                       1.135, -1.262, -1.159, -1.674, -1.351),
+  logFC_artigo_HD = c( 1.887, -1.743,  2.319, -1.612,  3.235,
+                       1.617, -2.954, -2.718,  1.430,  1.032),
+  logFC_artigo_PD = c(-1.2741803, -1.4988129, -1.28162, 1.5461572,
+                      -1.1023493, -1.2294081, -1.2365235, -1.9889283,
+                      -1.49514, -1.0651068),
+  p_artigo_AD = c(1.20e-4,8.75e-4,4.87e-2,3.36e-2,2.53e-2,
+                  2.43e-2,3.16e-2,3.47e-2,4.20e-3,2.19e-2),
+  p_artigo_HD = c(1.93e-7,9.45e-5,3.79e-3,1.30e-6,3.01e-11,
+                  5.53e-3,4.68e-4,1.00e-12,2.07e-4,1.79e-3),
+  p_artigo_PD = c(1.08e-6,8.06e-5,4.45e-2,1.49e-6,2.68e-6,
+                  3.55e-4,5.85e-4,4.52e-6,1.02e-3,2.00e-2)
+)
+
+# Em caso de divergencia entre anotacoes, nao selecionar arbitrariamente IDs.
+# O OrgDb usado no enriquecimento da Fase 01 e a fonte preferencial.
+resolver_geneid <- function(simbolo) {
+  ids_db <- character(0)
+  if (requireNamespace("org.Hs.eg.db", quietly = TRUE) &&
+      requireNamespace("AnnotationDbi", quietly = TRUE)) {
+    ids_db <- tryCatch({
+      z <- suppressMessages(AnnotationDbi::mapIds(
+        org.Hs.eg.db::org.Hs.eg.db,
+        keys = simbolo, column = "ENTREZID", keytype = "SYMBOL",
+        multiVals = "list"
+      ))
+      unique(as.character(unlist(z, use.names = FALSE)))
+    }, error = function(e) character(0))
+    ids_db <- ids_db[!is.na(ids_db) & nzchar(ids_db)]
+  }
+  ids_locais <- unique(unlist(lapply(results_list, function(dt) {
+    dt[!is.na(symbol) & toupper(trimws(symbol)) == toupper(simbolo), gene_id]
+  }), use.names = FALSE))
+  ids_locais <- as.character(ids_locais[!is.na(ids_locais)])
+
+  if (length(ids_db) == 1L) {
+    status <- if (length(ids_locais) > 0L &&
+                  !ids_db[[1]] %in% ids_locais) {
+      "divergencia_orgdb_vs_simbolos_locais"
+    } else "mapeamento_orgdb_univoco"
+    return(list(gene_id = ids_db[[1]], status = status,
+                ids_locais = paste(sort(ids_locais), collapse = ";")))
+  }
+  if (length(ids_db) > 1L) {
+    return(list(gene_id = NA_character_, status = "orgdb_ambiguo_revisar",
+                ids_locais = paste(sort(ids_locais), collapse = ";")))
+  }
+  if (length(ids_locais) == 1L) {
+    return(list(gene_id = ids_locais[[1]], status = "simbolo_local_univoco_sem_orgdb",
+                ids_locais = ids_locais[[1]]))
+  }
+  status <- if (length(ids_locais) > 1L) "simbolo_local_ambiguo_revisar" else
+    "simbolo_nao_localizado"
+  list(gene_id = NA_character_, status = status,
+       ids_locais = paste(sort(ids_locais), collapse = ";"))
+}
+
+resolvidos <- lapply(artigo_2025$gene_artigo, resolver_geneid)
+artigo_2025[, gene_id := vapply(resolvidos, `[[`, character(1), "gene_id")]
+artigo_2025[, status_mapeamento := vapply(resolvidos, `[[`, character(1), "status")]
+artigo_2025[, gene_ids_achados_nos_arquivos :=
+              vapply(resolvidos, `[[`, character(1), "ids_locais")]
+
+# Inclui os dez genes do artigo MESMO quando ausentes/não testaveis nas nossas
+# matrizes; NA significa indisponibilidade, nunca ausencia de efeito.
+audit_geneids <- function(ids) {
+  d <- data.table(gene_id = as.character(ids))
+  for (doenca in datasets) {
+    x <- results_list[[doenca]][, .(
+      gene_id, symbol, log2FoldChange, pvalue, padj,
+      DEG_article_like, DEG, DEG_sensitivity
+    )]
+    setnames(x, setdiff(names(x), "gene_id"),
+             paste0(setdiff(names(x), "gene_id"), "_", doenca))
+    d <- merge(d, x, by = "gene_id", all.x = TRUE, sort = FALSE)
+    effect_col <- paste0("log2FoldChange_", doenca)
+    p_col <- paste0("pvalue_", doenca)
+    d[, (paste0("testavel_", doenca)) :=
+        is.finite(get(effect_col)) & is.finite(get(p_col))]
+    d[, (paste0("direcao_", doenca)) := effect_direction(get(effect_col))]
+    d[, (paste0("status_nominal_", doenca)) := fcase(
+      is.na(get(paste0("symbol_", doenca))) & is.na(get(effect_col)),
+      "ausente_ou_sem_estatistica",
+      !get(paste0("testavel_", doenca)), "nao_testavel",
+      get(paste0("DEG_article_like_", doenca)) == TRUE, "DEG_nominal",
+      default = "nao_DEG_nominal"
+    )]
+  }
+  d[, simbolo_nosso := first_nonmissing(symbol_AD, symbol_HD, symbol_PD)]
+  d
+}
+
+ids_triplo_nominal <- sort(Reduce(intersect, article_like_sets))
+if (length(ids_triplo_nominal) != 8L) {
+  warning("Interseção nominal da Fase 01: ", length(ids_triplo_nominal),
+          " GeneIDs (o relatório anterior tinha 8); verificar versões dos dados.")
+}
+
+genes_triplo_nominal <- audit_geneids(ids_triplo_nominal)
+genes_triplo_nominal[, no_artigo_2025 :=
+                      gene_id %in% artigo_2025$gene_id[!is.na(artigo_2025$gene_id)]]
+genes_triplo_nominal[, mesma_direcao_nas_tres :=
+                      direcao_AD == direcao_HD & direcao_HD == direcao_PD &
+                      direcao_AD %in% c("Up", "Down")]
+setorder(genes_triplo_nominal, gene_id)
+
+artigo_2025[, ordem_original := seq_len(.N)]
+artigo_auditado <- merge(
+  artigo_2025,
+  audit_geneids(unique(artigo_2025$gene_id[!is.na(artigo_2025$gene_id)])),
+  by = "gene_id", all.x = TRUE, sort = FALSE
+)
+setorder(artigo_auditado, ordem_original)
+artigo_auditado[, ordem_original := NULL]
+
+for (doenca in datasets) {
+  observado <- artigo_auditado[[paste0("log2FoldChange_", doenca)]]
+  artigo <- artigo_auditado[[paste0("logFC_artigo_", doenca)]]
+  artigo_auditado[, (paste0("mesma_direcao_artigo_", doenca)) :=
+                   ifelse(is.finite(observado) & is.finite(artigo),
+                          sign(observado) == sign(artigo), NA)]
+}
+artigo_auditado[, reproducao_nominal_tripla :=
+                   !is.na(gene_id) & gene_id %in% ids_triplo_nominal]
+artigo_auditado[, concordancia_direcional_tripla :=
+   mesma_direcao_artigo_AD == TRUE & mesma_direcao_artigo_HD == TRUE &
+   mesma_direcao_artigo_PD == TRUE]
+
+comparacao_artigo_resumo <- data.table(
+  indicador = c("artigo_nominais_AD", "artigo_nominais_HD", "artigo_nominais_PD",
+     "nossos_nominais_AD", "nossos_nominais_HD", "nossos_nominais_PD",
+     "artigo_intersecao_tripla", "nossa_intersecao_tripla",
+     "genes_do_artigo_reproduzidos_nominal", "genes_nossos_ausentes_artigo",
+     "genes_artigo_sem_mapeamento_univoco",
+     "genes_artigo_reproduzidos_mesma_direcao_tripla"),
+  valor = c(262L, 1581L, 537L,
+      length(article_like_sets$AD), length(article_like_sets$HD),
+      length(article_like_sets$PD), 10L, length(ids_triplo_nominal),
+      sum(artigo_auditado$reproducao_nominal_tripla, na.rm = TRUE),
+      sum(!genes_triplo_nominal$no_artigo_2025, na.rm = TRUE),
+      sum(is.na(artigo_auditado$gene_id)),
+      sum(artigo_auditado$reproducao_nominal_tripla &
+          artigo_auditado$concordancia_direcional_tripla, na.rm = TRUE))
+)
+
+fwrite(genes_triplo_nominal,
+       file.path(output_dir, "genes_intersecao_nominal_tripla.tsv"), sep="\t", na="NA")
+fwrite(artigo_auditado,
+       file.path(output_dir, "dez_genes_Alharbi_2025_comparacao.tsv"), sep="\t", na="NA")
+fwrite(comparacao_artigo_resumo,
+       file.path(output_dir, "comparacao_Alharbi_2025_resumo.tsv"), sep="\t", na="NA")
+
+cat("\nInterseção nominal tripla — nomes e GeneIDs:\n")
+print(genes_triplo_nominal[, .(gene_id, simbolo_nosso, no_artigo_2025,
+          direcao_AD, direcao_HD, direcao_PD)])
+cat("\nCandidatos de Alharbi 2025 — reprodução nominal:\n")
+print(artigo_auditado[, .(gene_artigo, gene_id, status_mapeamento,
+               reproducao_nominal_tripla, concordancia_direcional_tripla)])
+
 # ==============================================================================
 # 16. AUDITORIA DOS VENNS
 # ==============================================================================
@@ -1883,102 +2070,47 @@ gsea_kegg <- integrate_gsea(
 # 22. INTEGRAÇÃO ORA HD + PD
 # ==============================================================================
 
-integrate_ora_hd_pd <- function(
-  file_path,
-  database_name
-) {
-
-  dt <- fread(
-    file_path
-  )
-
-  if (nrow(dt) == 0) {
-    return(
-      data.table()
-    )
+integrate_ora_hd_pd <- function(file_path, database_name) {
+  dt <- fread(file_path)
+  required <- c("dataset", "gene_set", "ID", "Description", "p.adjust", "significant")
+  missing <- setdiff(required, names(dt))
+  if (length(missing) > 0L) {
+    stop(database_name, " ORA: colunas ausentes: ", paste(missing, collapse = ", "))
   }
+  if (!"geneID" %in% names(dt)) dt[, geneID := NA_character_]
+  if (!"Count" %in% names(dt)) dt[, Count := NA_integer_]
+  dt[, significant := as_logical_safe(significant)]
+  sig <- dt[significant == TRUE & dataset %in% c("HD", "PD") &
+            !is.na(ID) & is.finite(p.adjust)]
+  # Se um mesmo ID constar mais de uma vez, preservar o menor FDR dentro
+  # da mesma categoria e do mesmo dataset, sem contar duplicatas.
+  setorder(sig, p.adjust)
+  sig <- unique(sig, by = c("dataset", "gene_set", "ID"))
 
-  required <- c(
-    "dataset",
-    "gene_set",
-    "ID",
-    "Description",
-    "p.adjust",
-    "significant"
-  )
+  empty <- data.table(gene_set = character(), ID = character(),
+     Description = character(), n_datasets = integer(),
+     datasets_shared = character(), best_FDR = numeric(),
+     FDR_HD = numeric(), FDR_PD = numeric(),
+     geneID_HD = character(), geneID_PD = character())
+  if (nrow(sig) == 0L) return(empty)
 
-  missing <- setdiff(
-    required,
-    names(dt)
-  )
-
-  if (length(missing) > 0) {
-    stop(
-      database_name,
-      " ORA: colunas ausentes: ",
-      paste(
-        missing,
-        collapse = ", "
-      )
-    )
-  }
-
-  dt[
-    ,
-    significant := as_logical_safe(
-      significant
-    )
-  ]
-
-  sig <- dt[
-    significant == TRUE &
-      dataset %in% c(
-        "HD",
-        "PD"
-      )
-  ]
-
-  if (nrow(sig) == 0) {
-    return(
-      data.table()
-    )
-  }
-
-  shared <- sig[
-    ,
-    .(
-      n_datasets = uniqueN(
-        dataset
-      ),
-
-      datasets_shared = paste(
-        sort(
-          unique(dataset)
-        ),
-        collapse = "+"
-      ),
-
-      best_FDR = min(
-        p.adjust,
-        na.rm = TRUE
-      )
-    ),
-    by = .(
-      gene_set,
-      ID,
-      Description
-    )
-  ][
-    n_datasets == 2
-  ]
-
-  setorder(
-    shared,
-    gene_set,
-    best_FDR
-  )
-
-  return(shared)
+  h <- sig[dataset == "HD", .(gene_set, ID, Description_HD=Description,
+                                FDR_HD=p.adjust, geneID_HD=geneID, Count_HD=Count)]
+  p <- sig[dataset == "PD", .(gene_set, ID, Description_PD=Description,
+                                FDR_PD=p.adjust, geneID_PD=geneID, Count_PD=Count)]
+  if (nrow(h) == 0L || nrow(p) == 0L) return(empty)
+  shared <- merge(h, p, by = c("gene_set", "ID"), all = FALSE)
+  if (nrow(shared) == 0L) return(empty)
+  shared[, Description := fifelse(!is.na(Description_HD) & nzchar(Description_HD),
+                                 Description_HD, Description_PD)]
+  shared[, `:=`(n_datasets=2L, datasets_shared="HD+PD",
+                best_FDR=pmin(FDR_HD, FDR_PD))]
+  setcolorder(shared, c("gene_set", "ID", "Description", "n_datasets",
+           "datasets_shared", "best_FDR", "FDR_HD", "FDR_PD",
+           "Count_HD", "Count_PD", "geneID_HD", "geneID_PD",
+           "Description_HD", "Description_PD"))
+  setorder(shared, gene_set, best_FDR)
+  shared
 }
 
 ora_go_shared <- integrate_ora_hd_pd(
@@ -1991,6 +2123,122 @@ ora_kegg_shared <- integrate_ora_hd_pd(
   "KEGG"
 )
 
+
+
+# ==============================================================================
+# 22b. ORA COMPLEMENTAR DOS GENES DA INTERSECAO NOMINAL TRIPLA
+#
+# Comparacao EXPLORATORIA: os genes nao foram selecionados por FDR.
+# Universo de fundo: genes testaveis nos tres datasets (common_universe).
+# Evitar interpretar eventual ausencia de termos como ausencia de biologia.
+# KEGG pode depender de acesso remoto e falhar; a tabela de status distingue
+# falha de execucao de ausencia de termos significativos.
+# ==============================================================================
+
+bases_ora <- c("GO_BP", "KEGG")
+nominal_ora_status <- data.table(
+  base = bases_ora,
+  situacao = "nao_executada",
+  mensagem = "",
+  n_genes_entrada = length(ids_triplo_nominal),
+  n_universo = length(common_universe),
+  n_termos_testados = NA_integer_,
+  n_termos_FDR005 = NA_integer_
+)
+
+# A tabela sempre tem cabecalho, mesmo quando nao ha resultados.
+modelo_ora_nominal <- data.table(
+  database=character(), ID=character(), Description=character(),
+  GeneRatio=character(), BgRatio=character(), pvalue=numeric(),
+  p.adjust=numeric(), qvalue=numeric(), Count=integer(),
+  geneID=character(), significant=logical()
+)
+
+executar_ora_nominal <- function(base) {
+  if (!requireNamespace("clusterProfiler", quietly=TRUE) ||
+      (base == "GO_BP" && !requireNamespace("org.Hs.eg.db", quietly=TRUE))) {
+    return(list(situacao="pacote_indisponivel",
+                mensagem="Requer clusterProfiler; GO requer org.Hs.eg.db",
+                tabela=copy(modelo_ora_nominal)))
+  }
+  if (length(ids_triplo_nominal) == 0L) {
+    return(list(situacao="sem_genes_entrada", mensagem="Interseção vazia",
+                tabela=copy(modelo_ora_nominal)))
+  }
+  z <- tryCatch({
+    if (base == "GO_BP") {
+      clusterProfiler::enrichGO(
+        gene = ids_triplo_nominal, universe = common_universe,
+        OrgDb = org.Hs.eg.db::org.Hs.eg.db, keyType = "ENTREZID",
+        ont = "BP", pAdjustMethod = "BH", pvalueCutoff=1,
+        qvalueCutoff=1, minGSSize=10, maxGSSize=500,
+        readable=FALSE)
+    } else {
+      clusterProfiler::enrichKEGG(
+        gene = ids_triplo_nominal, universe = common_universe,
+        organism = "hsa", keyType="ncbi-geneid", pAdjustMethod="BH",
+        pvalueCutoff=1, qvalueCutoff=1, minGSSize=10,
+        maxGSSize=500, use_internal_data=FALSE)
+    }
+  }, error=function(e) e)
+  if (inherits(z, "error")) {
+    return(list(situacao="erro_execucao", mensagem=conditionMessage(z),
+                tabela=copy(modelo_ora_nominal)))
+  }
+  if (is.null(z)) {
+    return(list(situacao="executada_sem_termos_testaveis",
+                mensagem="Nenhum termo retornado pelos filtros da base",
+                tabela=copy(modelo_ora_nominal)))
+  }
+  tab <- as.data.table(as.data.frame(z))
+  if (nrow(tab) == 0L) {
+    return(list(situacao="executada_sem_termos_testaveis",
+                mensagem="Nenhum termo retornado pelos filtros da base",
+                tabela=copy(modelo_ora_nominal)))
+  }
+  tab[, database := base]
+  tab[, significant := is.finite(p.adjust) & p.adjust < alpha]
+  # Conservar todos os termos testados, nao apenas FDR-significativos.
+  for (col in setdiff(names(modelo_ora_nominal), names(tab))) {
+    tab[, (col) := NA]
+  }
+  setcolorder(tab, c(names(modelo_ora_nominal),
+                      setdiff(names(tab), names(modelo_ora_nominal))))
+  setorder(tab, p.adjust, pvalue)
+  list(situacao="executada", mensagem="ORA nominal comparativa",
+       tabela=tab)
+}
+
+ora_nominal_results <- lapply(bases_ora, executar_ora_nominal)
+names(ora_nominal_results) <- bases_ora
+for (base in bases_ora) {
+  z <- ora_nominal_results[[base]]
+  i <- match(base, nominal_ora_status$base)
+  nominal_ora_status[i, `:=`(
+    situacao=z$situacao, mensagem=z$mensagem,
+    n_termos_testados=if (startsWith(z$situacao,"executada")) nrow(z$tabela) else NA_integer_,
+    n_termos_FDR005=if (startsWith(z$situacao,"executada"))
+       sum(z$tabela$significant, na.rm=TRUE) else NA_integer_
+  )]
+  fwrite(z$tabela,
+         file.path(output_dir, paste0("ORA_exploratoria_8_genes_nominais_",base,".tsv")),
+         sep="\t", na="NA")
+}
+fwrite(nominal_ora_status,
+       file.path(output_dir, "ORA_exploratoria_nominal_status.tsv"),
+       sep="\t", na="NA")
+
+# Quantificar o que foi efetivamente compartilhado na ORA principal HD-PD,
+# distinguindo termos All / Up / Down para nao somar a mesma via varias vezes.
+ora_hd_pd_resumo <- rbindlist(lapply(bases_ora, function(base) {
+  x <- if (base == "GO_BP") ora_go_shared else ora_kegg_shared
+  data.table(database=base, gene_set=c("All","Up","Down"),
+    n_termos_compartilhados=vapply(c("All","Up","Down"),
+      function(g) sum(x$gene_set==g,na.rm=TRUE),integer(1)))
+}))
+fwrite(ora_hd_pd_resumo,
+       file.path(output_dir, "ORA_compartilhada_HD_PD_resumo_por_conjunto.tsv"),
+       sep="\t", na="NA")
 
 # ==============================================================================
 # 23. TABELA ÚNICA DAS REGIÕES DOS VENNS
@@ -2308,7 +2556,7 @@ ggsave(
 p_venn_common_primary <- create_venn_plot(
   venn_result = venn_common_primary,
 
-  title = "Interseção dos DEGs no universo comum testável",
+  title = "DEGs no universo comum — critério principal",
 
   subtitle = paste0(
     "FDR < 0,05 e |log2FC| > 0,58; AD∩HD∩PD = ",
@@ -2326,8 +2574,8 @@ ggsave(
     "venn_common_primary_AD_HD_PD.png"
   ),
   p_venn_common_primary,
-  width = 10,
-  height = 8,
+  width = 12.5,
+  height = 9,
   dpi = 300,
   bg = "white"
 )
@@ -2340,7 +2588,7 @@ ggsave(
 p_venn_common_sensitivity <- create_venn_plot(
   venn_result = venn_common_sensitivity,
 
-  title = "Interseção dos DEGs no universo comum — sensibilidade",
+  title = "DEGs no universo comum — critério estrito",
 
   subtitle = paste0(
     "FDR < 0,05 e |log2FC| > 1; AD∩HD∩PD = ",
@@ -2358,8 +2606,8 @@ ggsave(
     "venn_common_sensitivity_AD_HD_PD.png"
   ),
   p_venn_common_sensitivity,
-  width = 10,
-  height = 8,
+  width = 12.5,
+  height = 9,
   dpi = 300,
   bg = "white"
 )
@@ -2377,7 +2625,7 @@ article_totals <- setNames(
 p_venn_article_like <- create_venn_plot(
   venn_result = venn_article_like,
 
-  title = "Interseção dos genes — critério comparativo nominal",
+  title = "Interseção nominal — comparação com o artigo",
 
   subtitle = paste0(
     "p < 0,05 e |log2FC| > 1; listas completas: AD = ",
@@ -2401,8 +2649,8 @@ ggsave(
     "venn_article_like_nominal_AD_HD_PD.png"
   ),
   p_venn_article_like,
-  width = 10,
-  height = 8,
+  width = 12.5,
+  height = 9,
   dpi = 300,
   bg = "white"
 )
@@ -2987,6 +3235,30 @@ integration_summary <- data.table(
   )
 )
 
+# Novas métricas auditáveis, sem alterar as definicoes originais.
+integration_summary <- rbind(
+  integration_summary,
+  data.table(
+    metric = c(
+      "article_like_n_genes_Alharbi_2025_reproduzidos",
+      "article_like_n_genes_nossos_exclusivos_vs_Alharbi",
+      "ORA_nominal_GO_BP_termos_testados",
+      "ORA_nominal_GO_BP_termos_FDR005",
+      "ORA_nominal_KEGG_termos_testados",
+      "ORA_nominal_KEGG_termos_FDR005"
+    ),
+    value = c(
+      sum(artigo_auditado$reproducao_nominal_tripla, na.rm=TRUE),
+      sum(!genes_triplo_nominal$no_artigo_2025, na.rm=TRUE),
+      nominal_ora_status[base=="GO_BP",n_termos_testados],
+      nominal_ora_status[base=="GO_BP",n_termos_FDR005],
+      nominal_ora_status[base=="KEGG",n_termos_testados],
+      nominal_ora_status[base=="KEGG",n_termos_FDR005]
+    )
+  ),
+  use.names = TRUE
+)
+
 fwrite(
   integration_summary,
   file.path(
@@ -3080,3 +3352,12 @@ cat("\n")
 cat("============================================================\n")
 cat("07_cross_disease_integration.R CONCLUÍDO\n")
 cat("============================================================\n")
+
+cat("\nAUDITORIA COMPLEMENTAR FASE 01 CONCLUIDA\n")
+cat("Interseção nominal tripla: ", length(ids_triplo_nominal), " genes\n", sep="")
+cat("Genes de Alharbi 2025 reproduzidos: ",
+    sum(artigo_auditado$reproducao_nominal_tripla, na.rm=TRUE), " / 10\n", sep="")
+cat("ORA compartilhada HD-PD (GO BP / KEGG, All / Up / Down):\n")
+print(ora_hd_pd_resumo)
+cat("ORA nominal tripla — situacao por base:\n")
+print(nominal_ora_status)

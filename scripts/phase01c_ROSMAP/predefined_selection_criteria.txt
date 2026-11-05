@@ -1,0 +1,10 @@
+Critérios definidos antes da análise do ROSMAP
+A avaliação do ROSMAP não será baseada no número absoluto de DEGs obtidos. Sua adequação como dataset principal de AD será avaliada considerando conjuntamente:
+1. Qualidade técnica: ausência de problemas graves de QC, mapeamento inequívoco entre counts e metadata e ausência de confundimento completo entre diagnóstico e variáveis técnicas.
+2. Robustez da expressão diferencial: alta concordância dos log2FoldChanges entre modelo principal e modelo ajustado por covariáveis, com manutenção predominante da direção dos efeitos.
+3. Replicabilidade externa: avaliar concordância direcional dos log2FoldChanges entre ROSMAP e GSE125583 no universo gênico comparável, sem exigir replicação gene a gene completa devido à diferença de região cerebral.
+4. Coerência funcional: avaliar se ORA/GSEA recuperam processos biologicamente convergentes entre ROSMAP e GSE125583, particularmente os principais eixos funcionais identificados independentemente.
+5. Compatibilidade transdiagnóstica: avaliar o universo testável compartilhado com GSE64810 e GSE68719 sem utilizar o número de genes compartilhados como critério isolado de seleção.
+6. Anatomia: considerar a maior proximidade entre ROSMAP DLPFC, referência Mathys 2019 DLPFC e os datasets pré-frontais de HD/PD como vantagem metodológica previamente definida.
+
+Os dados bulk RNA-seq do ROSMAP foram obtidos do AD Knowledge Portal/Synapse sob acesso controlado. Foi utilizada a matriz de contagens harmonizada ROSMAP_batch2_gene_all_counts_matrix_clean.txt (Synapse ID ..., versão ...), juntamente com os respectivos arquivos de metadata clínica, biospecimen e assay (Synapse IDs ..., versões ...). O acesso foi realizado mediante autorização do Synapse/AD Knowledge Portal de acordo com os termos de uso dos dados.

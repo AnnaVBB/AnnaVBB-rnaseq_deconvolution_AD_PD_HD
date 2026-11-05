@@ -1,0 +1,1402 @@
+---
+title: "Relatório da Fase 01b: Avaliação do GSE125583 como dataset alternativo para doença de Alzheimer"
+author: "Pipeline RNA-Seq Neurodegenerativo"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: false
+    code_folding: hide
+    self_contained: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  out.width = "92%"
+)
+
+options(
+  stringsAsFactors = FALSE,
+  scipen = 999,
+  knitr.graphics.rel_path = FALSE
+)
+
+required_packages <- c(
+  "data.table",
+  "knitr"
+)
+
+missing_packages <- required_packages[
+  !vapply(
+    required_packages,
+    requireNamespace,
+    logical(1),
+    quietly = TRUE
+  )
+]
+
+if (length(missing_packages) > 0) {
+  stop(
+    "Pacotes necessários não instalados: ",
+    paste(
+      missing_packages,
+      collapse = ", "
+    )
+  )
+}
+
+suppressPackageStartupMessages({
+  library(data.table)
+  library(knitr)
+})
+
+
+# ==============================================================================
+# RAIZ DO PROJETO
+# ==============================================================================
+#
+# O arquivo .Rmd fica em scripts/reports/ e o HTML final em reports/.
+# A função abaixo permite renderizar tanto pela raiz do projeto quanto pelo
+# botão Knit do editor, procurando automaticamente a raiz do repositório.
+# ==============================================================================
+
+find_project_root <- function() {
+
+  candidates <- unique(
+    normalizePath(
+      c(
+        getwd(),
+        file.path(getwd(), ".."),
+        file.path(getwd(), "../.."),
+        file.path(getwd(), "../../..")
+      ),
+      winslash = "/",
+      mustWork = FALSE
+    )
+  )
+
+  valid <- candidates[
+    dir.exists(
+      file.path(
+        candidates,
+        "results",
+        "candidate_GSE125583"
+      )
+    ) &
+      dir.exists(
+        file.path(
+          candidates,
+          "scripts"
+        )
+      )
+  ]
+
+  if (length(valid) == 0) {
+    stop(
+      paste0(
+        "Não foi possível localizar a raiz do projeto.\n",
+        "Renderize este relatório dentro do repositório ",
+        "AnnaVBB-rnaseq_deconvolution_AD_PD_HD."
+      )
+    )
+  }
+
+  normalizePath(
+    valid[1],
+    winslash = "/",
+    mustWork = TRUE
+  )
+}
+
+
+project_root <- find_project_root()
+
+knitr::opts_knit$set(
+  root.dir = project_root
+)
+
+
+# ==============================================================================
+# DIRETÓRIOS
+# ==============================================================================
+
+candidate_dir <- file.path(
+  project_root,
+  "results",
+  "candidate_GSE125583"
+)
+
+comparison_dir <- file.path(
+  candidate_dir,
+  "comparison_AD"
+)
+
+candidate_plot_dir <- file.path(
+  candidate_dir,
+  "plots"
+)
+
+comparison_plot_dir <- file.path(
+  candidate_plot_dir,
+  "comparison_AD"
+)
+
+enrichment_dir <- file.path(
+  candidate_dir,
+  "enrichment"
+)
+
+enrichment_plot_dir <- file.path(
+  candidate_plot_dir,
+  "enrichment"
+)
+
+integration_dir <- file.path(
+  candidate_dir,
+  "integration_AD_HD_PD"
+)
+
+integration_plot_dir <- file.path(
+  integration_dir,
+  "plots"
+)
+
+
+# ==============================================================================
+# FUNÇÕES AUXILIARES
+# ==============================================================================
+
+show_figure <- function(path) {
+
+  if (
+    length(path) == 0 ||
+    is.na(path) ||
+    !file.exists(path)
+  ) {
+
+    cat(
+      "\n\n**Figura não encontrada:** `",
+      path,
+      "`\n\n",
+      sep = ""
+    )
+
+    return(
+      invisible(NULL)
+    )
+  }
+
+  knitr::include_graphics(
+    normalizePath(
+      path,
+      winslash = "/",
+      mustWork = TRUE
+    ),
+    rel_path = FALSE
+  )
+}
+
+
+fmt_int <- function(x) {
+
+  if (
+    length(x) == 0 ||
+    is.na(x)
+  ) {
+    return("NA")
+  }
+
+  format(
+    as.integer(
+      round(
+        as.numeric(x)
+      )
+    ),
+    big.mark = ".",
+    decimal.mark = ",",
+    scientific = FALSE,
+    trim = TRUE
+  )
+}
+
+
+fmt_num <- function(
+  x,
+  digits = 2
+) {
+
+  if (
+    length(x) == 0 ||
+    is.na(x)
+  ) {
+    return("NA")
+  }
+
+  format(
+    round(
+      as.numeric(x),
+      digits
+    ),
+    nsmall = digits,
+    big.mark = ".",
+    decimal.mark = ",",
+    scientific = FALSE,
+    trim = TRUE
+  )
+}
+
+
+fmt_p <- function(x) {
+
+  if (
+    length(x) == 0 ||
+    is.na(x)
+  ) {
+    return("NA")
+  }
+
+  format(
+    as.numeric(x),
+    scientific = TRUE,
+    digits = 3
+  )
+}
+
+
+report_table <- function(
+  x,
+  caption = NULL,
+  digits = NULL
+) {
+
+  if (is.null(digits)) {
+
+    knitr::kable(
+      x,
+      format = "html",
+      caption = caption,
+      align = "c",
+      table.attr = 'class="report-table"'
+    )
+
+  } else {
+
+    knitr::kable(
+      x,
+      format = "html",
+      caption = caption,
+      digits = digits,
+      align = "c",
+      table.attr = 'class="report-table"'
+    )
+  }
+}
+
+
+get_metric <- function(
+  table,
+  metric_name
+) {
+
+  value <- table[
+    metric == metric_name,
+    n_genes
+  ]
+
+  if (length(value) == 0) {
+    return(NA_real_)
+  }
+
+  as.numeric(
+    value[1]
+  )
+}
+
+
+get_integration <- function(
+  criterion_name,
+  metric_name
+) {
+
+  value <- integration_summary[
+    criterion == criterion_name &
+      metric == metric_name,
+    n_genes
+  ]
+
+  if (length(value) == 0) {
+    stop(
+      "Métrica não encontrada em integration_summary: ",
+      criterion_name,
+      " / ",
+      metric_name
+    )
+  }
+
+  as.numeric(
+    value[1]
+  )
+}
+
+
+
+# ==============================================================================
+# LOCALIZAÇÃO ROBUSTA DE FIGURAS
+# ==============================================================================
+#
+# Os scripts da Fase 01b podem salvar figuras em subpastas diferentes.
+# Em vez de presumir nome/caminho exato, procuramos recursivamente dentro
+# de results/candidate_GSE125583/.
+# ==============================================================================
+
+find_plot <- function(
+  directory,
+  include_patterns,
+  exclude_patterns = character()
+) {
+
+  if (!dir.exists(directory)) {
+    return(NA_character_)
+  }
+
+  files <- list.files(
+    directory,
+    pattern = "\\.(png|jpg|jpeg)$",
+    full.names = TRUE,
+    recursive = TRUE,
+    ignore.case = TRUE
+  )
+
+  if (length(files) == 0) {
+    return(NA_character_)
+  }
+
+  base <- basename(files)
+
+  keep <- rep(
+    TRUE,
+    length(files)
+  )
+
+  for (pattern in include_patterns) {
+    keep <- keep &
+      grepl(
+        pattern,
+        base,
+        ignore.case = TRUE,
+        perl = TRUE
+      )
+  }
+
+  if (length(exclude_patterns) > 0) {
+    for (pattern in exclude_patterns) {
+      keep <- keep &
+        !grepl(
+          pattern,
+          base,
+          ignore.case = TRUE,
+          perl = TRUE
+        )
+    }
+  }
+
+  hits <- files[
+    keep
+  ]
+
+  if (length(hits) == 0) {
+    return(NA_character_)
+  }
+
+  hits <- hits[
+    order(
+      nchar(hits),
+      hits
+    )
+  ]
+
+  hits[1]
+}
+
+
+find_plot_any <- function(
+  directory,
+  alternatives,
+  exclude_patterns = character()
+) {
+
+  for (patterns in alternatives) {
+
+    hit <- find_plot(
+      directory = directory,
+      include_patterns = patterns,
+      exclude_patterns = exclude_patterns
+    )
+
+    if (
+      length(hit) == 1 &&
+      !is.na(hit)
+    ) {
+      return(hit)
+    }
+  }
+
+  NA_character_
+}
+
+
+# ==============================================================================
+# ARQUIVOS DE RESULTADOS
+# ==============================================================================
+
+characteristics_file <- file.path(
+  comparison_dir,
+  "AD_dataset_characteristics.tsv"
+)
+
+deg_comparison_file <- file.path(
+  comparison_dir,
+  "AD_DEG_comparison.tsv"
+)
+
+testable_comparison_file <- file.path(
+  comparison_dir,
+  "AD_testable_universe_comparison.tsv"
+)
+
+cross_disease_universe_file <- file.path(
+  comparison_dir,
+  "candidate_AD_HD_PD_testable_universe.tsv"
+)
+
+enrichment_summary_file <- file.path(
+  enrichment_dir,
+  "enrichment_summary_GSE125583.tsv"
+)
+
+integration_summary_file <- file.path(
+  integration_dir,
+  "integration_summary_GSE125583_AD_HD_PD.tsv"
+)
+
+
+# ==============================================================================
+# FIGURAS — CAMINHOS EXATOS
+# ==============================================================================
+#
+# Usamos os nomes gerados diretamente pelos scripts 04–08, evitando que o
+# relatório selecione uma figura errada por correspondência aproximada.
+# ==============================================================================
+
+pca_group_plot <- find_plot_any(
+  candidate_dir,
+  alternatives = list(
+    c("pca", "group"),
+    c("pca", "diagn"),
+    c("^pca")
+  ),
+  exclude_patterns = c(
+    "sex",
+    "age"
+  )
+)
+
+ma_plot <- find_plot_any(
+  candidate_dir,
+  alternatives = list(
+    c("^ma[_-]"),
+    c("ma[_-]?plot"),
+    c("^ma\\.")
+  )
+)
+
+volcano_plot <- find_plot_any(
+  candidate_dir,
+  alternatives = list(
+    c("volcano", "GSE125583"),
+    c("volcano")
+  ),
+  exclude_patterns = c(
+    "old",
+    "compare",
+    "comparison"
+  )
+)
+
+heatmap_plot <- find_plot_any(
+  candidate_dir,
+  alternatives = list(
+    c("heatmap", "top50"),
+    c("heatmap", "primary"),
+    c("heatmap")
+  )
+)
+
+stability_plot <- find_plot_any(
+  candidate_dir,
+  alternatives = list(
+    c("main", "adjust"),
+    c("adjust", "main"),
+    c("stability"),
+    c("log2fc", "adjust")
+  ),
+  exclude_patterns = c(
+    "old",
+    "GSE53697",
+    "comparison"
+  )
+)
+
+ora_go_up_plot <- file.path(
+  enrichment_plot_dir,
+  "ora_GO_BP_up.png"
+)
+
+ora_go_down_plot <- file.path(
+  enrichment_plot_dir,
+  "ora_GO_BP_down.png"
+)
+
+gsea_go_plot <- file.path(
+  enrichment_plot_dir,
+  "gsea_GO_BP.png"
+)
+
+gsea_kegg_plot <- file.path(
+  enrichment_plot_dir,
+  "gsea_KEGG.png"
+)
+
+comparison_samples_plot <- file.path(
+  comparison_plot_dir,
+  "AD_dataset_sample_size.png"
+)
+
+comparison_testable_plot <- file.path(
+  comparison_plot_dir,
+  "AD_dataset_testable_genes.png"
+)
+
+comparison_deg_plot <- file.path(
+  comparison_plot_dir,
+  "AD_dataset_DEG_counts.png"
+)
+
+comparison_effect_plot <- file.path(
+  comparison_plot_dir,
+  "AD_old_vs_new_log2FC.png"
+)
+
+venn_primary_file <- file.path(
+  integration_plot_dir,
+  "venn_common_primary_GSE125583_AD_HD_PD.png"
+)
+
+venn_strict_file <- file.path(
+  integration_plot_dir,
+  "venn_common_sensitivity_GSE125583_AD_HD_PD.png"
+)
+
+venn_nominal_file <- file.path(
+  integration_plot_dir,
+  "venn_article_like_nominal_GSE125583_AD_HD_PD.png"
+)
+
+
+# ==============================================================================
+# VALIDAR ARQUIVOS NECESSÁRIOS PARA AS TABELAS
+# ==============================================================================
+
+required_files <- c(
+  characteristics_file,
+  deg_comparison_file,
+  testable_comparison_file,
+  cross_disease_universe_file,
+  integration_summary_file
+)
+
+missing_files <- required_files[
+  !file.exists(required_files)
+]
+
+if (length(missing_files) > 0) {
+
+  stop(
+    paste0(
+      "Arquivos necessários para o relatório não encontrados:\n",
+      paste(
+        paste0(
+          " - ",
+          missing_files
+        ),
+        collapse = "\n"
+      )
+    )
+  )
+}
+
+
+# ==============================================================================
+# CARREGAR RESULTADOS
+# ==============================================================================
+
+characteristics <- fread(
+  characteristics_file
+)
+
+deg_comparison <- fread(
+  deg_comparison_file
+)
+
+testable_comparison <- fread(
+  testable_comparison_file
+)
+
+cross_disease_universe <- fread(
+  cross_disease_universe_file
+)
+
+integration_summary <- fread(
+  integration_summary_file
+)
+
+if (file.exists(
+  enrichment_summary_file
+)) {
+
+  enrichment_summary <- fread(
+    enrichment_summary_file
+  )
+
+} else {
+
+  enrichment_summary <- NULL
+}
+
+
+# ==============================================================================
+# SUBCONJUNTOS / MÉTRICAS PRINCIPAIS
+# ==============================================================================
+
+old_char <- characteristics[
+  dataset == "GSE53697"
+]
+
+new_char <- characteristics[
+  dataset == "GSE125583"
+]
+
+old_deg <- deg_comparison[
+  dataset == "GSE53697"
+]
+
+new_deg <- deg_comparison[
+  dataset == "GSE125583"
+]
+
+n_testable_common_AD <- get_metric(
+  testable_comparison,
+  "testable_intersection"
+)
+
+n_new_hd <- get_metric(
+  cross_disease_universe,
+  "AD_new_intersection_HD"
+)
+
+n_new_pd <- get_metric(
+  cross_disease_universe,
+  "AD_new_intersection_PD"
+)
+
+n_new_hd_pd <- get_metric(
+  cross_disease_universe,
+  "AD_new_intersection_HD_intersection_PD"
+)
+
+n_old_hd_pd <- get_metric(
+  cross_disease_universe,
+  "AD_old_intersection_HD_intersection_PD"
+)
+
+n_gain_triple <- (
+  n_new_hd_pd -
+    n_old_hd_pd
+)
+
+
+# ==============================================================================
+# RESULTADOS DE QC REGISTRADOS NA EXECUÇÃO VALIDADA DO SCRIPT 04
+# ==============================================================================
+
+qc_summary <- list(
+  raw_genes = 39376L,
+  all_zero_genes = 1181L,
+  filtered_genes = 21218L,
+  removed_genes = 18158L,
+  kept_percent = 53.89,
+  n_samples = 289L,
+  smallest_group = 70L,
+  library_min = 8057646,
+  library_median = 27754254,
+  library_max = 93556289,
+  detected_min = 22434L,
+  detected_median = 27363L,
+  detected_max = 30250L,
+  pc1 = 26.05,
+  pc2 = 22.05,
+  wilcox_library_p = 0.319,
+  wilcox_detected_p = 0.05155
+)
+
+
+# ==============================================================================
+# RESULTADOS DO MODELO AJUSTADO — SCRIPT 05
+# ==============================================================================
+
+adjusted_summary <- list(
+  n_samples = 288L,
+  primary = 1540L,
+  strict = 149L,
+  shared_primary = 1481L,
+  main_only = 206L,
+  adjusted_only = 59L,
+  shared_same_direction = 1481L,
+  shared_opposite_direction = 0L,
+  spearman = 0.9946
+)
+```
+
+<style>
+body {
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+h1, h2, h3 {
+  font-weight: 700;
+}
+
+blockquote {
+  border-left: 4px solid #4d4d4d;
+  padding-left: 14px;
+  color: #444;
+}
+
+.report-note {
+  background: #f7f7f7;
+  border-left: 4px solid #6c757d;
+  padding: 12px 16px;
+  margin: 18px 0;
+}
+
+.result-box {
+  background: #f8f9fa;
+  border: 1px solid #e3e6e8;
+  border-radius: 6px;
+  padding: 14px 18px;
+  margin: 18px 0;
+}
+
+/* Espaçamento externo e interno das tabelas */
+table.report-table {
+  width: auto !important;
+  max-width: 96% !important;
+  margin: 20px auto 32px auto !important;
+  border-collapse: collapse !important;
+}
+
+table.report-table th,
+table.report-table td {
+  padding: 8px 16px !important;
+  vertical-align: middle !important;
+}
+
+table.report-table caption {
+  padding-bottom: 10px !important;
+  color: #666;
+  text-align: center;
+}
+
+/* Espaço extra ao redor das figuras */
+.figure {
+  margin-top: 22px;
+  margin-bottom: 28px;
+}
+
+.caption {
+  color: #555;
+  margin-top: 8px;
+}
+</style>
+
+
+```{r figure-path-audit, include=FALSE}
+figure_audit <- data.table(
+  Figura = c(
+    "PCA por grupo",
+    "MA plot",
+    "Volcano plot",
+    "Heatmap top 50",
+    "Modelo principal vs ajustado"
+  ),
+  Caminho = c(
+    pca_group_plot,
+    ma_plot,
+    volcano_plot,
+    heatmap_plot,
+    stability_plot
+  ),
+  Encontrada = c(
+    !is.na(pca_group_plot) && file.exists(pca_group_plot),
+    !is.na(ma_plot) && file.exists(ma_plot),
+    !is.na(volcano_plot) && file.exists(volcano_plot),
+    !is.na(heatmap_plot) && file.exists(heatmap_plot),
+    !is.na(stability_plot) && file.exists(stability_plot)
+  )
+)
+
+missing_figures <- figure_audit[
+  Encontrada == FALSE
+]
+
+if (nrow(missing_figures) > 0) {
+  warning(
+    paste0(
+      "Algumas figuras não foram localizadas automaticamente: ",
+      paste(
+        missing_figures$Figura,
+        collapse = ", "
+      ),
+      ". Para inspecionar os PNGs reais, rode no terminal: ",
+      "find results/candidate_GSE125583 -type f -iname '*.png' | sort"
+    )
+  )
+}
+```
+
+# 1. Introdução
+
+## 1.1 Contexto e motivação
+
+A Fase 01 original utilizou o **GSE53697** para doença de Alzheimer (AD), em conjunto com **GSE64810** para doença de Huntington (HD) e **GSE68719** para doença de Parkinson (PD). No GSE53697, nenhum gene permaneceu significativo após correção por FDR, em um conjunto de apenas 17 amostras.
+
+Esse resultado não significa ausência de biologia no dataset original. **Apesar da baixa potência e do ruído estatístico, sinais biológicos estavam presentes**, como indicado pelos genes com evidência nominal e pelos padrões funcionais observados na Fase 01. A principal limitação era a falta de robustez estatística no nível gene a gene.
+
+A Fase 01b avaliou, portanto, o **GSE125583** como candidato alternativo para AD. A comparação considerou tamanho amostral, qualidade dos dados, universo gênico, expressão diferencial, estabilidade após ajuste por covariáveis, coerência funcional e compatibilidade com HD e PD.
+
+## 1.2 Objetivo
+
+O objetivo foi determinar se o **GSE125583** é tecnicamente e estatisticamente adequado para representar AD nas etapas posteriores do projeto. Foram avaliados o controle de qualidade, a expressão diferencial, o enriquecimento funcional, a comparação com o GSE53697 e, ao final, uma integração exploratória dos DEGs de AD, HD e PD para comparação com o primeiro relatório.
+
+# 2. Auditoria, preparação e harmonização dos dados
+
+## 2.1 Características gerais
+
+```{r dataset-characteristics}
+dataset_table <- data.table(
+  Dataset = c(
+    "GSE53697",
+    "GSE125583"
+  ),
+  Papel = c(
+    "AD original",
+    "AD candidato"
+  ),
+  Região = c(
+    "Dorsolateral prefrontal cortex",
+    "Fusiform gyrus"
+  ),
+  Amostras = c(
+    old_char$n_samples,
+    new_char$n_samples
+  ),
+  AD = c(
+    old_char$n_AD,
+    new_char$n_AD
+  ),
+  Controle = c(
+    old_char$n_Control,
+    new_char$n_Control
+  ),
+  `Genes brutos` = c(
+    old_char$n_raw_genes,
+    new_char$n_raw_genes
+  ),
+  `Genes testáveis` = c(
+    old_char$n_testable_genes,
+    new_char$n_testable_genes
+  )
+)
+
+report_table(
+  dataset_table,
+  caption = "Características gerais dos dois datasets de Alzheimer."
+)
+```
+
+O GSE125583 contém **289 amostras**, sendo **219 AD** e **70 controles**, todas provenientes de **giro fusiforme**. Os metadados incluem idade, sexo e estágio de Braak; as ausências pontuais de covariáveis não exigiram remoção de amostras do modelo principal.
+
+## 2.2 Preparação da matriz de contagens
+
+Foi utilizada a matriz `GSE125583_raw_counts_GRCh38.p13_NCBI.tsv.gz`.
+
+A auditoria identificou **39.376 genes e 289 amostras**. As contagens são inteiras e foram utilizadas sem arredondamento. A matriz apresentou bibliotecas entre aproximadamente **`r fmt_int(qc_summary$library_min)`** e **`r fmt_int(qc_summary$library_max)`** contagens.
+
+## 2.3 Harmonização com HD e PD
+
+As matrizes brutas de GSE125583, GSE64810 e GSE68719 compartilham os mesmos **39.376 NCBI GeneIDs**. Para manter a integração reproduzível, o **GeneID foi preservado como chave explícita**, independentemente da ordem das linhas.
+
+Esse resultado indica elevada compatibilidade técnica do universo gênico entre os três estudos. A compatibilidade anatômica, entretanto, é diferente e é discutida nas seções de comparação e conclusão.
+
+# 3. Controle de qualidade e pré-filtragem
+
+## 3.1 Critério de pré-filtragem
+
+Genes de baixa expressão foram removidos antes do DESeq2. O critério foi **count ≥ 10 em pelo menos 70 amostras**, sendo 70 o tamanho do menor grupo do GSE125583.
+
+```{r qc-filter-table}
+qc_filter_table <- data.table(
+  Métrica = c(
+    "Genes antes do filtro",
+    "Genes retidos",
+    "Genes removidos",
+    "Percentual retido",
+    "Amostras retidas"
+  ),
+  Valor = c(
+    fmt_int(qc_summary$raw_genes),
+    fmt_int(qc_summary$filtered_genes),
+    fmt_int(qc_summary$removed_genes),
+    paste0(
+      fmt_num(
+        qc_summary$kept_percent,
+        2
+      ),
+      "%"
+    ),
+    fmt_int(qc_summary$n_samples)
+  )
+)
+
+report_table(
+  qc_filter_table,
+  caption = "Resumo da pré-filtragem do GSE125583."
+)
+```
+
+Foram mantidos **21.218 genes (53,9%)** e todas as **289 amostras**.
+
+## 3.2 Profundidade de biblioteca e genes detectados
+
+As bibliotecas variaram de **`r fmt_int(qc_summary$library_min)`** a **`r fmt_int(qc_summary$library_max)`** contagens, com mediana de **`r fmt_int(qc_summary$library_median)`**. O número de genes detectados por amostra variou de **`r fmt_int(qc_summary$detected_min)`** a **`r fmt_int(qc_summary$detected_max)`**, com mediana de **`r fmt_int(qc_summary$detected_median)`**.
+
+Não houve diferença significativa entre AD e controles na profundidade de biblioteca (**p = `r fmt_num(qc_summary$wilcox_library_p, 3)`**). Para genes detectados, o resultado ficou próximo do limiar convencional, mas permaneceu acima de 0,05 (**p = `r fmt_num(qc_summary$wilcox_detected_p, 4)`**). Esses resultados não forneceram justificativa objetiva para remoção de amostras.
+
+## 3.3 PCA e transformação VST
+
+A PCA foi construída após **VST (variance stabilizing transformation)**. A VST transforma as contagens para reduzir a forte dependência entre média e variância típica de RNA-seq: genes muito abundantes deixam de dominar a distância entre amostras apenas por terem contagens maiores. Isso torna PCA e heatmaps mais interpretáveis.
+
+A VST foi usada **somente para exploração e visualização**; o teste de expressão diferencial continuou sendo realizado pelo DESeq2 sobre as contagens inteiras.
+
+No PCA, **PC1 explicou `r fmt_num(qc_summary$pc1, 2)`%** e **PC2 `r fmt_num(qc_summary$pc2, 2)`%** da variância.
+
+```{r qc-pca-group, fig.cap="PCA das amostras do GSE125583 após VST, colorida por grupo diagnóstico."}
+show_figure(
+  pca_group_plot
+)
+```
+
+Há sobreposição entre AD e controles, o que não caracteriza falha do dataset: a PCA é não supervisionada e resume todas as fontes de variabilidade presentes no tecido. Considerando o conjunto dos indicadores de QC, **nenhuma amostra foi excluída da análise principal**.
+
+# 4. Expressão diferencial
+
+## 4.1 Estratégia estatística
+
+A expressão diferencial foi analisada com **DESeq2**, comparando AD contra Control, com `Control` como referência. O modelo principal foi **`~ group`** e o teste padrão avaliou a hipótese nula **log₂FC = 0**.
+
+Para interpretar os resultados foram usados três níveis:
+
+- **Significância estatística:** `FDR < 0,05`, independentemente da magnitude do efeito.
+- **Critério principal:** `FDR < 0,05` e `|log₂FC| > 0,58`, aproximadamente uma alteração de pelo menos 1,5 vez.
+- **Critério estrito (chamado "sensitivity" nos scripts):** `FDR < 0,05` e `|log₂FC| > 1`, correspondente a uma alteração de pelo menos 2 vezes.
+
+Além disso, foi mantido um **critério nominal comparativo** — `p < 0,05` e `|log₂FC| > 1`, sem correção por FDR — apenas para reproduzir a lógica de comparação do relatório original. Ele não substitui o critério principal.
+
+## 4.2 Resultado principal
+
+```{r deg-summary}
+deg_summary_table <- data.table(
+  Critério = c(
+    "Genes testados",
+    "Significativos por FDR (< 0,05)",
+    "DEGs principais (FDR < 0,05; |log2FC| > 0,58)",
+    "DEGs principais — Up",
+    "DEGs principais — Down",
+    "DEGs — critério estrito (FDR < 0,05; |log2FC| > 1)",
+    "Nominal comparativo (p < 0,05; |log2FC| > 1)"
+  ),
+  GSE125583 = c(
+    new_deg$n_tested,
+    new_deg$n_FDR_lt_005,
+    new_deg$n_primary,
+    new_deg$n_primary_up,
+    new_deg$n_primary_down,
+    new_deg$n_sensitivity,
+    new_deg$n_article_like
+  )
+)
+
+report_table(
+  deg_summary_table,
+  caption = "Resumo da expressão diferencial no GSE125583."
+)
+```
+
+Dos **21.218 genes testados**, **12.731** apresentaram FDR < 0,05. Quando também se exige magnitude mínima de efeito, permanecem **1.687 DEGs principais**, sendo **763 Up** e **924 Down**. Com o limiar mais estrito de `|log₂FC| > 1`, permanecem **155 genes**.
+
+A diferença entre 12.731 genes significativos por FDR e 1.687 DEGs principais ocorre porque uma coorte grande pode detectar efeitos pequenos com alta precisão. O critério principal adiciona um limiar de magnitude para destacar alterações estatisticamente robustas e biologicamente mais expressivas.
+
+## 4.3 MA plot e volcano plot
+
+```{r ma-plot, fig.cap="MA plot da comparação AD vs Control no GSE125583."}
+show_figure(
+  ma_plot
+)
+```
+
+O MA plot mostra o tamanho do efeito em função da expressão média. Muitos genes são estatisticamente significativos, mas apenas uma fração ultrapassa também o limiar de magnitude do critério principal.
+
+```{r volcano-plot, fig.cap="Volcano plot da comparação AD vs Control no GSE125583."}
+show_figure(
+  volcano_plot
+)
+```
+
+O volcano plot combina magnitude do efeito e significância ajustada, facilitando a visualização dos genes classificados como `Up`, `Down` e `Not_DEG`.
+
+## 4.4 Heatmap dos principais DEGs
+
+```{r heatmap, fig.cap="Heatmap dos 50 principais DEGs do GSE125583."}
+show_figure(
+  heatmap_plot
+)
+```
+
+O heatmap utiliza valores transformados por VST e padronizados por gene para destacar padrões relativos entre amostras. Há agrupamento parcial entre AD e controles, compatível com a heterogeneidade observada na PCA. A ausência de separação perfeita não implica ausência de sinal diferencial.
+
+## 4.5 Robustez após ajuste por idade e sexo
+
+Foi executado um segundo modelo, **`~ age_centered + sex + group`**, como verificação de robustez. Uma amostra sem idade e sexo foi excluída apenas desse modelo, resultando em **288 amostras**.
+
+O modelo ajustado identificou **`r fmt_int(adjusted_summary$primary)` DEGs principais**. Desses, **`r fmt_int(adjusted_summary$shared_primary)`** também eram DEGs principais no modelo não ajustado e todos os compartilhados mantiveram a mesma direção de efeito.
+
+A correlação dos log₂FC entre os dois modelos foi **ρ = `r fmt_num(adjusted_summary$spearman, 4)`**, indicando estabilidade muito alta.
+
+```{r stability-plot, fig.cap="Comparação dos log2FoldChanges entre o modelo principal e o modelo ajustado por idade e sexo."}
+show_figure(
+  stability_plot
+)
+```
+
+Portanto, idade e sexo não parecem explicar globalmente a assinatura de AD observada. Braak não foi usado como covariável do modelo principal porque é uma característica neuropatológica diretamente relacionada à doença e seu ajuste poderia remover parte do próprio sinal de interesse.
+
+# 5. Enriquecimento funcional
+
+## 5.1 Estratégia
+
+Foram utilizadas duas abordagens complementares:
+
+- **ORA (Over-Representation Analysis):** testa se determinadas vias/termos aparecem mais do que o esperado entre os DEGs principais;
+- **GSEA (Gene Set Enrichment Analysis):** usa o ranking completo dos genes, sem exigir um corte prévio em DEG.
+
+Foram avaliados **GO Biological Process (GO BP)** e **KEGG**. Na ORA, o background foi composto pelos **21.218 genes testados no DESeq2**, e a significância funcional foi controlada por FDR < 0,05.
+
+## 5.2 Resumo quantitativo
+
+```{r enrichment-summary}
+if (!is.null(
+  enrichment_summary
+)) {
+
+  report_table(
+    enrichment_summary,
+    caption = "Resumo das análises de enriquecimento funcional do GSE125583."
+  )
+
+} else {
+
+  enrichment_fallback <- data.table(
+    Análise = c(
+      "ORA GO BP — All",
+      "ORA GO BP — Up",
+      "ORA GO BP — Down",
+      "ORA KEGG — All",
+      "ORA KEGG — Up",
+      "ORA KEGG — Down",
+      "GSEA GO BP",
+      "GSEA KEGG"
+    ),
+    `Termos significativos (FDR < 0,05)` = c(
+      499,
+      467,
+      288,
+      25,
+      13,
+      32,
+      1716,
+      165
+    )
+  )
+
+  report_table(
+    enrichment_fallback,
+    caption = "Resumo das análises de enriquecimento funcional do GSE125583."
+  )
+}
+```
+
+GO BP apresentou grande número de termos significativos, especialmente na GSEA. Esses termos não representam mecanismos totalmente independentes, pois categorias de GO frequentemente são redundantes entre si.
+
+## 5.3 Processos aumentados em AD
+
+Os genes com maior expressão em AD mostraram enriquecimento para **resposta imune e citocinas, angiogênese/vasculatura, adesão celular e remodelamento de matriz extracelular**.
+
+```{r ora-go-up, fig.cap="ORA de GO Biological Process para genes com maior expressão em AD."}
+show_figure(
+  ora_go_up_plot
+)
+```
+
+```{r gsea-go, fig.cap="GSEA de GO Biological Process no GSE125583."}
+show_figure(
+  gsea_go_plot
+)
+```
+
+A concordância entre ORA e GSEA reforça uma assinatura de ativação imune, vascular e estrutural/remodeladora no tecido de AD.
+
+## 5.4 Processos reduzidos em AD
+
+Os genes com menor expressão em AD foram enriquecidos para **transmissão sináptica, neurotransmissão, ciclo de vesículas, potencial de membrana, respiração celular, fosforilação oxidativa, tradução mitocondrial e proteostase**.
+
+```{r ora-go-down, fig.cap="ORA de GO Biological Process para genes com menor expressão em AD."}
+show_figure(
+  ora_go_down_plot
+)
+```
+
+```{r gsea-kegg, fig.cap="GSEA de KEGG no GSE125583."}
+show_figure(
+  gsea_kegg_plot
+)
+```
+
+Em síntese, a direção funcional predominante foi **AD-up: imunidade/vasculatura/remodelamento** e **AD-down: sinapse/neurotransmissão/metabolismo mitocondrial**.
+
+Como se trata de bulk RNA-seq, essas diferenças podem refletir tanto alterações de expressão dentro das células quanto alterações na proporção dos tipos celulares presentes no tecido.
+
+# 6. Comparação entre GSE53697 e GSE125583
+
+## 6.1 Tamanho amostral
+
+```{r comparison-sample-size, fig.cap="Comparação do tamanho amostral dos dois datasets de Alzheimer."}
+show_figure(
+  comparison_samples_plot
+)
+```
+
+O GSE53697 contém **17 amostras**, enquanto o GSE125583 contém **289**. O aumento do tamanho amostral eleva substancialmente o poder para detectar alterações após correção para múltiplos testes.
+
+## 6.2 Universo gênico bruto e testável
+
+O universo bruto aumentou de **19.185 genes** no GSE53697 para **39.376** no GSE125583. Após o pré-filtro, os universos testáveis foram **15.811** e **21.218 genes**, respectivamente.
+
+Há **15.147 genes testáveis em ambos** (Jaccard ≈ 0,692), e o GSE125583 adiciona **6.071 genes testáveis** em relação ao conjunto original.
+
+```{r comparison-testable, fig.cap="Comparação do universo testável dos dois datasets de Alzheimer."}
+show_figure(
+  comparison_testable_plot
+)
+```
+
+## 6.3 O que significam as diferentes métricas de DEG?
+
+```{r comparison-deg}
+comparison_deg_table <- data.table(
+  Métrica = c(
+    "Genes testados",
+    "FDR < 0,05",
+    "Principal: FDR < 0,05 e |log2FC| > 0,58",
+    "Estrito: FDR < 0,05 e |log2FC| > 1",
+    "Nominal: p < 0,05 e |log2FC| > 1"
+  ),
+  GSE53697 = c(
+    old_deg$n_tested,
+    old_deg$n_FDR_lt_005,
+    old_deg$n_primary,
+    old_deg$n_sensitivity,
+    old_deg$n_article_like
+  ),
+  GSE125583 = c(
+    new_deg$n_tested,
+    new_deg$n_FDR_lt_005,
+    new_deg$n_primary,
+    new_deg$n_sensitivity,
+    new_deg$n_article_like
+  )
+)
+
+report_table(
+  comparison_deg_table,
+  caption = "Comparação dos critérios de expressão diferencial."
+)
+```
+
+As linhas da tabela respondem a perguntas diferentes. **FDR < 0,05** indica evidência estatística após corrigir milhares de testes, mas não exige efeito grande. O **critério principal** acrescenta `|log₂FC| > 0,58` para exigir também magnitude mínima. O **critério estrito** aumenta essa exigência para `|log₂FC| > 1` e funciona como teste de sensibilidade: verifica se a conclusão permanece quando só aceitamos efeitos de pelo menos 2 vezes. Já o **critério nominal** não corrige para múltiplos testes e foi mantido apenas para reproduzir a comparação do primeiro relatório.
+
+No GSE53697, nenhum gene sobreviveu ao FDR, embora **52 genes** tenham satisfeito o critério nominal. Isso sugere que **o sinal biológico não estava necessariamente ausente; ele estava imerso em maior incerteza estatística**, compatível com o pequeno tamanho amostral. No GSE125583, **12.731 genes** atingiram FDR < 0,05, **1.687** satisfizeram o critério principal e **155** permaneceram no critério estrito.
+
+No GSE125583, os 155 genes do critério estrito também aparecem no critério nominal; por isso as duas contagens são iguais neste dataset, apesar de os critérios estatísticos serem conceitualmente diferentes.
+
+```{r comparison-deg-plot, fig.cap="Número de genes classificados segundo os três critérios de expressão diferencial nos dois datasets de AD."}
+show_figure(
+  comparison_deg_plot
+)
+```
+
+## 6.4 Como interpretar o gráfico de efeito GSE53697 vs GSE125583?
+
+Cada ponto representa **um gene testável nos dois datasets**. O eixo x mostra o log₂FC estimado no GSE53697 e o eixo y mostra o log₂FC do mesmo gene no GSE125583.
+
+A linha diagonal representa concordância perfeita: um gene sobre a linha teria efeito semelhante nos dois estudos. Pontos no mesmo sentido dos dois eixos indicam efeitos com a mesma direção; pontos em sinais opostos indicam direções discordantes. As linhas tracejadas em zero separam genes com aumento e redução de expressão.
+
+As cores destacam o **critério nominal comparativo**: cinza = não satisfaz em nenhum dataset; turquesa = apenas GSE53697; laranja = apenas GSE125583; roxo = ambos.
+
+```{r comparison-effect, fig.cap="Comparação gene a gene dos log2FoldChanges entre GSE53697 e GSE125583 no universo testável comum."}
+show_figure(
+  comparison_effect_plot
+)
+```
+
+A correlação global foi **Spearman ρ ≈ 0,02**, e nenhum gene satisfez simultaneamente o critério nominal nos dois datasets dentro do universo testável comum. Portanto, o GSE125583 **não replica a assinatura gene a gene do GSE53697**.
+
+Isso não equivale a dizer que um dos datasets não contém sinal biológico. O GSE53697 possui maior limitação de potência e ruído estatístico, enquanto os dois estudos também diferem em região cerebral, coorte e contexto experimental. A concordância pode ser mais evidente em processos biológicos agregados do que nos mesmos genes individuais.
+
+## 6.5 Compatibilidade gênica com HD e PD
+
+Após os filtros de expressão, a interseção testável entre o novo AD, HD e PD passou de **15.149 genes** com o GSE53697 para **20.576 genes** com o GSE125583 — um ganho de **5.427 genes** potencialmente comparáveis.
+
+```{r cross-disease-universe}
+cross_table <- data.table(
+  Comparação = c(
+    "AD novo",
+    "HD",
+    "PD",
+    "AD novo ∩ HD",
+    "AD novo ∩ PD",
+    "HD ∩ PD",
+    "AD novo ∩ HD ∩ PD",
+    "AD antigo ∩ HD ∩ PD"
+  ),
+  `Genes testáveis` = c(
+    get_metric(
+      cross_disease_universe,
+      "AD_new_testable"
+    ),
+    get_metric(
+      cross_disease_universe,
+      "HD_testable"
+    ),
+    get_metric(
+      cross_disease_universe,
+      "PD_testable"
+    ),
+    n_new_hd,
+    n_new_pd,
+    get_metric(
+      cross_disease_universe,
+      "HD_intersection_PD"
+    ),
+    n_new_hd_pd,
+    n_old_hd_pd
+  )
+)
+
+report_table(
+  cross_table,
+  caption = "Compatibilidade dos universos testáveis entre AD, HD e PD."
+)
+```
+
+Essa melhora é **técnica e gênica**, não anatômica: GSE125583 utiliza giro fusiforme, enquanto GSE64810 e GSE68719 utilizam córtex pré-frontal BA9. Essa diferença é especialmente relevante para interpretações posteriores de composição celular.
+
+# 7. Integração exploratória AD–HD–PD
+
+## 7.1 Por que existem três diagramas de Venn?
+
+Os três Venns respondem a perguntas ligeiramente diferentes:
+
+- **Venn principal harmonizado:** entre os genes que eram testáveis nas três doenças, quais são DEGs com `FDR < 0,05` e `|log₂FC| > 0,58`?
+- **Venn estrito harmonizado:** repete a mesma comparação, mas exige `|log₂FC| > 1`.
+- **Venn nominal de listas completas:** usa `p < 0,05` e `|log₂FC| > 1` em cada dataset sem limitar previamente ao universo testável comum. Ele foi incluído porque reproduz a lógica da figura do primeiro relatório.
+
+A palavra **harmonizado** significa, portanto, que AD, HD e PD são comparados somente no conjunto de **`r fmt_int(n_new_hd_pd)` genes que puderam ser efetivamente testados nos três estudos**. Isso torna a comparação mais justa entre datasets.
+
+O Venn nominal, por outro lado, pode incluir em uma lista genes que não eram testáveis em outro dataset. Por isso ele é menos apropriado para inferência transdiagnóstica rigorosa, mas é o **mais diretamente comparável ao Venn da Fase 01 original**.
+
+## 7.2 Venn harmonizado — critério principal
+
+No universo comum, as listas contêm **`r fmt_int(get_integration("common_primary", "AD_total"))` DEGs em AD**, **`r fmt_int(get_integration("common_primary", "HD_total"))` em HD** e **`r fmt_int(get_integration("common_primary", "PD_total"))` em PD**. A interseção das três doenças contém **`r fmt_int(get_integration("common_primary", "AD_HD_PD"))` genes**.
+
+```{r venn-common-primary, fig.cap="Interseção dos DEGs de AD (GSE125583), HD e PD no universo testável comum — critério principal: FDR < 0,05 e |log2FC| > 0,58."}
+show_figure(
+  venn_primary_file
+)
+```
+
+Este é o Venn mais apropriado para responder quais DEGs são compartilhados quando exigimos **comparabilidade gênica e controle de FDR**.
+
+## 7.3 Venn harmonizado — critério estrito
+
+Com `FDR < 0,05` e `|log₂FC| > 1`, as listas no universo comum contêm **`r fmt_int(get_integration("common_sensitivity", "AD_total"))` genes em AD**, **`r fmt_int(get_integration("common_sensitivity", "HD_total"))` em HD** e **`r fmt_int(get_integration("common_sensitivity", "PD_total"))` em PD**. A interseção tripla contém **`r fmt_int(get_integration("common_sensitivity", "AD_HD_PD"))` genes**.
+
+```{r venn-common-strict, fig.cap="Interseção dos DEGs de AD (GSE125583), HD e PD no universo testável comum — critério estrito: FDR < 0,05 e |log2FC| > 1."}
+show_figure(
+  venn_strict_file
+)
+```
+
+Esse gráfico verifica se as sobreposições permanecem quando se exige uma magnitude de efeito maior.
+
+## 7.4 Venn nominal — comparação direta com o primeiro relatório
+
+O terceiro Venn usa as **listas completas** do critério `p < 0,05` e `|log₂FC| > 1`, exatamente para manter comparabilidade com a figura nominal da Fase 01.
+
+As listas atuais contêm **`r fmt_int(get_integration("article_like_full_lists", "AD_total"))` genes em AD**, **`r fmt_int(get_integration("article_like_full_lists", "HD_total"))` em HD** e **`r fmt_int(get_integration("article_like_full_lists", "PD_total"))` em PD**.
+
+```{r venn-nominal, fig.cap="Interseção das listas completas de AD (GSE125583), HD e PD pelo critério nominal p < 0,05 e |log2FC| > 1. Este gráfico é comparável ao Venn nominal da Fase 01 original."}
+show_figure(
+  venn_nominal_file
+)
+```
+
+No primeiro relatório, as listas eram **AD = 52, HD = 701 e PD = 533**, com **8 genes compartilhados pelas três doenças**. Com o GSE125583, a interseção tripla é de **`r fmt_int(get_integration("article_like_full_lists", "AD_HD_PD"))` genes**.
+
+A finalidade deste Venn não é provar que o dataset com maior interseção é biologicamente “melhor”. Ele mostra **quanto a estrutura de sobreposição muda quando trocamos o dataset de AD**, mantendo a mesma regra usada na primeira análise.
+
+# 8. Conclusão da Fase 01b
+
+O GSE125583 mostrou desempenho técnico e estatístico muito superior ao GSE53697: possui 289 amostras, 21.218 genes testáveis, 1.687 DEGs pelo critério principal, alta estabilidade após ajuste por idade e sexo (ρ ≈ 0,995) e uma assinatura funcional coerente, com processos imunes/vasculares aumentados e processos sinápticos/mitocondriais reduzidos.
+
+Ao mesmo tempo, ele **não reproduz a assinatura gene a gene do GSE53697** (ρ ≈ 0,02), e sua região cerebral é diferente daquela utilizada em HD e PD. O GSE125583 é de **giro fusiforme**, enquanto os datasets de HD e PD são de **córtex pré-frontal BA9**.
+
+Assim, a Fase 01b demonstra que o GSE125583 é um candidato robusto e melhora substancialmente a compatibilidade técnica e o universo gênico compartilhado, mas a **heterogeneidade anatômica permanece uma limitação importante**. A integração por Venn foi mantida como documentação comparativa da troca de dataset, sem definir por si só qual conjunto de AD deve ser adotado definitivamente.
