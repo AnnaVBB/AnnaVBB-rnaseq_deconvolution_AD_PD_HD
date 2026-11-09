@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 # ==============================================================================
-# 11 | ANALISE DE PROPORCOES CASO-CONTROLE COM COVARIAVEIS APROVADAS
+# 11 | ANALISE DE PROPORCOES CASO-CONTROLE COM COVARIAVEIS APROVADAS (v3)
 # TCC AD / PD / HD. Entradas prontas: 09 + auditoria 10.
 #
 # DESENHO
@@ -14,6 +14,7 @@
 #   - NUNCA combina HD e PD em uma unica analise (44 controles em comum).
 #   - Covariaveis nao sao selecionadas por valor-p; exige PLANO APROVADO.
 #   - Amostras completas: as MESMAS para os oito tipos e tres metodos da coorte.
+#   - v3: corrige nomes effect.case/p.case em HC3 e impede PASS com NA.
 #
 # USO: Rscript scripts/phase02_deconvolution/11_modelos_ajustados_deconvolucao.R
 # Configuracao obrigatoria para inferencia:
@@ -64,7 +65,7 @@ if(!file.exists(PLAN)) {
 plan <- fread(PLAN,na.strings=c('NA','NaN'))
 needplan <- c('dataset','approved','numeric_covariates','categorical_covariates','cluster_column','justification','provenance')
 if(!all(needplan%in%names(plan)))stop('Plano sem: ',paste(setdiff(needplan,names(plan)),collapse=','))
-if(nrow(plan)!=4L||!setequal(plan$dataset,DATASETS)||anyDuplicated(plan,'dataset'))stop('Plano exige exatamente quatro coortes distintas')
+if(nrow(plan)!=4L||!setequal(plan$dataset,DATASETS)||anyDuplicated(plan, by='dataset'))stop('Plano exige exatamente quatro coortes distintas')
 # Ajuste robusto HC3, nao requer pacote sandwich; erro robusto assintotico.
 fit_hc3 <- function(y,X,index) {
  n <- nrow(X); p <- ncol(X)
@@ -77,7 +78,9 @@ fit_hc3 <- function(y,X,index) {
  meat <- crossprod(X, X*as.numeric((resid/(1-lev))^2))
  vc <- Q%*%meat%*%Q
  se <- sqrt(diag(vc)); df <- n-p
- b <- beta[index]; s <- se[index]
+ # Evita nomes herdados do coeficiente "case" (ex.: effect.case),
+ # que anteriormente deixavam effect/ci/p como NA apesar de status PASS.
+ b <- unname(beta[index]); s <- unname(se[index])
  if(!is.finite(b)||!is.finite(s)||s<=0) stop('Coeficiente ou SE nao estimavel')
  crit <- qt(0.975,df)
  c(effect=b,ci_low=b-crit*s,ci_high=b+crit*s,p=2*pt(-abs(b/s),df),
@@ -105,7 +108,7 @@ for(ds in DATASETS) {
  if(!all(c('sample_id','group',covars)%in%names(md))) {
     logstat(ds,'FAIL_COVARIATE_NOT_FOUND',paste(setdiff(covars,names(md)),collapse=','));next
  }
- if(anyDuplicated(md,'sample_id'))stop(ds,': duplicated metadata ID')
+ if(anyDuplicated(md, by='sample_id'))stop(ds,': duplicated metadata ID')
  md <- md[,c('sample_id','group',covars),with=FALSE]
  for(nm in num) if(!is.numeric(md[[nm]])||any(!is.finite(md[[nm]][!is.na(md[[nm]])]))) {
     stop(ds,': ',nm,' nao numerica/finita. Harmonize explicitamente no metadata_extension.')
@@ -191,7 +194,21 @@ for(ds in DATASETS) {
        if(stat=='PASS') {
           fit <- tryCatch(fit_hc3(Y[,ct],X,which(colnames(X)=='case')),
                   error=function(e) e)
-          if(inherits(fit,'error'))stat <- paste0('FAIL_FIT:',conditionMessage(fit)) else est[names(fit)] <- fit
+          if(inherits(fit,'error')) {
+            stat <- paste0('FAIL_FIT:',conditionMessage(fit))
+          } else {
+            if (!identical(names(fit), names(est))) {
+              stop(ds, '/', mt, '/', ct, ': nomes inesperados na saida HC3: ',
+                   paste(names(fit), collapse=','))
+            }
+            if (anyNA(fit) || any(!is.finite(fit)) ||
+                fit[['ci_low']] > fit[['effect']] ||
+                fit[['ci_high']] < fit[['effect']] ||
+                fit[['p']] < 0 || fit[['p']] > 1) {
+              stop(ds, '/', mt, '/', ct, ': resultado HC3 inconsistente. Nao registrar PASS.')
+            }
+            est <- fit
+          }
        }
        rows[[length(rows)+1L]] <- data.table(dataset=ds,disease=DISEASE[[ds]],method=mt,
          cell_type=ct,scale=transform,n_total=nrow(md),n_used=nrow(kept),
@@ -213,6 +230,19 @@ if(length(qc))WR(rbindlist(qc,fill=TRUE),'11_design_audit.tsv')
 if(length(cov_bal))WR(rbindlist(cov_bal,fill=TRUE),'11_covariate_balance.tsv')
 if(length(rows)) {
  res <- rbindlist(rows,fill=TRUE)
+ # Protecao contra erro silencioso de nomes/gravacao dos coeficientes.
+ pass <- res[status=='PASS']
+ if (nrow(pass)) {
+   required_numeric <- c('effect','ci_low','ci_high','p_hc3','robust_se','df_resid')
+   invalid <- vapply(required_numeric,function(nm) {
+     anyNA(pass[[nm]]) || any(!is.finite(pass[[nm]]))
+   },logical(1))
+   if (any(invalid)) {
+     stop('Modelos PASS com coeficientes/p-valores/IC ausentes: ',
+          paste(names(invalid)[invalid],collapse=', '),
+          '. Os arquivos de resultados nao serao sobrescritos.')
+   }
+ }
  res[,fdr_bh_8types:=p.adjust(p_hc3,method='BH'),by=.(dataset,method,scale)]
  WR(res,'11_adjusted_contrasts_all.tsv')
  WR(res[scale=='percentage'],'11_adjusted_pp_HC3.tsv')

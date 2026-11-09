@@ -8,6 +8,7 @@
 # - Recuperar os campos GEO !Sample_*, com procedencia para cada campo;
 # - Fazer crosswalk exato entre GSM e sample_id dos metadados da etapa 05;
 # - Entregar EXTENSOES CANDIDATAS, nunca aplicar automaticamente.
+# - v2: inclui age_of_death (rotulo usado no GSE64810) nos candidatos.
 #
 # SEGURANCA METODOLOGICA:
 # - Nao consulta a internet, nao inventa idade/sexo/regiao e nao imputa NAs;
@@ -191,7 +192,8 @@ for (ds in DATASETS) {
   map <- match_samples(base, wide)
   WR(map, paste0("10b_", ds, "_sample_crosswalk.tsv"))
   matched <- merge(map, wide, by.x = "geo_sample_id", by.y = "gsm", all.x = TRUE, sort = FALSE)
-  candidate_keys <- c("age", "age_at_death", "sex", "gender", "pmi", "postmortem_interval",
+  candidate_keys <- c("age", "age_at_death", "age_of_death", "sex", "gender",
+                       "sex_at_birth", "pmi", "postmortem_interval", "post_mortem_interval",
                        "rin", "rna_integrity_number", "batch", "sequencing_batch",
                        "brain_region", "region", "tissue_subtype", "tissue", "braak_score",
                        "apoe_status", "geo_source_name")
